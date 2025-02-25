@@ -12,20 +12,21 @@
 Tensor::Tensor(const vector<size_t> &shape_) {
   ndim = shape_.size();
   for (size_t i = 0; i < ndim; i++) { shape[i] = shape_[i]; }
-  size_t N_ = num_elem();
-  buf = (float *) calloc(N_, sizeof(float));
+  size_t bufsize = num_elem() * sizeof(float);
+  CHECK_CUDA(cudaMallocHost(&buf, bufsize));
+  memset(buf, 0, bufsize);
 }
 
 Tensor::Tensor(const vector<size_t> &shape_, float *buf_) {
   ndim = shape_.size();
   for (size_t i = 0; i < ndim; i++) { shape[i] = shape_[i]; }
-  size_t N_ = num_elem();
-  buf = (float *) malloc(N_ * sizeof(float));
-  memcpy(buf, buf_, N_ * sizeof(float));
+  size_t bufsize = num_elem() * sizeof(float);
+  CHECK_CUDA(cudaMallocHost(&buf, bufsize));
+  memcpy(buf, buf_, bufsize);
 }
 
 Tensor::~Tensor() {
-  if (buf != nullptr) free(buf);
+  if (buf != nullptr) CHECK_CUDA(cudaFreeHost(buf));
 }
 
 size_t Tensor::num_elem() {
