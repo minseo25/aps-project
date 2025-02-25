@@ -3,6 +3,7 @@
 #include "layer.h"
 #include "model.h"
 
+#define BATCH_SIZE 2
 
 /* [Model Parameters]
  * _w: Weight parameter
@@ -129,31 +130,31 @@ Activation *conv1_a, *relu1_a, *pool1_a;
 Activation *conv2_a, *relu2_a, *pool2_a;
 Activation *conv3_a, *relu3_a, *pool3_a;
 Activation *concat_a;
-Activation *gate_a, *topk_val_a;
+Activation *gate_a; //, *topk_val_a;
 Activation *expert0_a, *expert1_a, *expert2_a, *expert3_a;
 Activation *moe_a;
 Activation *linear0_a, *linear1_a, *linear2_a;
 
 void alloc_activations() {
-  conv0_a = new Activation({1024, SEQ_LEN - 2});
-  pool0_a = new Activation({1024});
-  conv1_a = new Activation({1024, SEQ_LEN - 4});
-  pool1_a = new Activation({1024});
-  conv2_a = new Activation({1024, SEQ_LEN - 6});
-  pool2_a = new Activation({1024});
-  conv3_a = new Activation({1024, SEQ_LEN - 8});
-  pool3_a = new Activation({1024});
-  concat_a = new Activation({4096});
-  gate_a = new Activation({4}); 
-  topk_val_a = new Activation({2});
-  expert0_a = new Activation({2048});
-  expert1_a = new Activation({2048});
-  expert2_a = new Activation({2048});
-  expert3_a = new Activation({2048});
-  moe_a = new Activation({2048});
-  linear0_a = new Activation({1024});
-  linear1_a = new Activation({512});
-  linear2_a = new Activation({2});
+  conv0_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 2});
+  pool0_a = new Activation({BATCH_SIZE, 1024});
+  conv1_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 4});
+  pool1_a = new Activation({BATCH_SIZE, 1024});
+  conv2_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 6});
+  pool2_a = new Activation({BATCH_SIZE, 1024});
+  conv3_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 8});
+  pool3_a = new Activation({BATCH_SIZE, 1024});
+  concat_a = new Activation({BATCH_SIZE, 4096});
+  gate_a = new Activation({BATCH_SIZE, 4}); 
+  // topk_val_a = new Activation({2});
+  expert0_a = new Activation({BATCH_SIZE, 2048});
+  expert1_a = new Activation({BATCH_SIZE, 2048});
+  expert2_a = new Activation({BATCH_SIZE, 2048});
+  expert3_a = new Activation({BATCH_SIZE, 2048});
+  moe_a = new Activation({BATCH_SIZE, 2048});
+  linear0_a = new Activation({BATCH_SIZE, 1024});
+  linear1_a = new Activation({BATCH_SIZE, 512});
+  linear2_a = new Activation({BATCH_SIZE, 2});
 }
 
 void free_activations() {
@@ -167,7 +168,7 @@ void free_activations() {
   delete pool3_a;
   delete concat_a;
   delete gate_a;
-  delete topk_val_a;
+  // delete topk_val_a;
   delete expert0_a;
   delete expert1_a;
   delete moe_a;
@@ -178,7 +179,7 @@ void free_activations() {
 
 /* Dense Mixture-of-Experts (MoE) Layer
  * - The MoE layer has a total 4 Experts (Linear) with a Gating mechanism.
- * @param [in1]      in: [4096]
+ * @param [in1]      in: [BS, 4096]
  * @param [in2]  exp0_w: [2048, 4096]
  * @param [in3]  exp0_b: [2048]
  * @param [in4]  exp1_w: [2048, 4096]
@@ -189,90 +190,93 @@ void free_activations() {
  * @param [in9]  exp3_b: [2048]
  * @param [in10] gate_w: [4, 4096]
  * @param [in11] gate_b: [4]
- * @param [out]     out: [2048]
+ * @param [out]     out: [BS, 2048]
  */
 void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
          Parameter *exp1_w, Parameter *exp1_b, Parameter *exp2_w,
          Parameter *exp2_b, Parameter *exp3_w, Parameter *exp3_b,
          Parameter *gate_w, Parameter *gate_b, Activation *out) {
 
-  /* 1. Compute the gate logits: in [4096] -> out [4] */
+  /* 1. Compute the gate logits: in [BS, 4096] -> out [BS, 4] */
   Linear(in, gate_w, gate_b, gate_a);
 
-  /* 2. Compute the softmax of the gate logits: in [4] -> out [4] */
+  /* 2. Compute the softmax of the gate logits: in [BS, 4] -> out [BS, 4] */
   Softmax(gate_a);
 
-  /* 3. Compute the expert's output: in [4096] -> out [2048] */
+  /* 3. Compute the expert's output: in [BS, 4096] -> out [BS, 2048] */
   Linear(in, exp0_w, exp0_b, expert0_a);
   Linear(in, exp1_w, exp1_b, expert1_a);
   Linear(in, exp2_w, exp2_b, expert2_a);
   Linear(in, exp3_w, exp3_b, expert3_a);
 
-  /* 4. Scale the expert's output: in [2048] -> out [2048] */
-  Scaling(expert0_a, gate_a->buf[0]);
-  Scaling(expert1_a, gate_a->buf[1]);
-  Scaling(expert2_a, gate_a->buf[2]);
-  Scaling(expert3_a, gate_a->buf[3]);
+  /* 4. Scale the expert's output: in [BS, 2048] -> out [BS, 2048] */
+  Scaling(expert0_a, gate_a->buf, 0);
+  Scaling(expert1_a, gate_a->buf, 1);
+  Scaling(expert2_a, gate_a->buf, 2);
+  Scaling(expert3_a, gate_a->buf, 3);
 
   /* 5. Accumulate the expert's output:
-    * in [2048] + [2048] + [2048] + [2048] -> out [2048] */
+    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [BS, 2048] */
   Add(expert0_a, expert1_a, expert2_a, expert3_a, out);
 }
 
 /* [Model Computation: Sentiment Analysis Task] */
 void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
-  for (size_t n = 0; n < n_samples; n++) {
+  int n_batches = (n_samples + BATCH_SIZE - 1) / BATCH_SIZE;
+  for (int n = 0; n < n_batches; n++) {
     /* Load a sentence from the inputs */
-    Tensor *input = new Tensor({4096, SEQ_LEN}, inputs + n * SEQ_LEN * 4096); 
+    size_t start = n * BATCH_SIZE;
+    size_t BS = (n == n_batches - 1) ? n_samples - start : BATCH_SIZE; // batch size
+    Tensor *input = new Tensor({BS, 4096, SEQ_LEN}, inputs + start * SEQ_LEN * 4096); 
 
-    /* in [4096, SEQ_LEN] -> out [1024, SEQ_LEN - 2] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 2] */
     Conv1D(input, conv0_w, conv0_b, conv0_a);
     ReLU(conv0_a); 
 
-    /* in [1024, SEQ_LEN - 2] -> out [1024] */
+    /* in [BS, 1024, SEQ_LEN - 2] -> out [BS, 1024] */
     GetMax(conv0_a, pool0_a);
 
-    /* in [4096, SEQ_LEN] -> out [1024, SEQ_LEN - 4] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 4] */
     Conv1D(input, conv1_w, conv1_b, conv1_a);
     ReLU(conv1_a);
 
-    /* in [1024, SEQ_LEN - 4] -> out [1024] */
+    /* in [BS, 1024, SEQ_LEN - 4] -> out [BS, 1024] */
     GetMax(conv1_a, pool1_a);
 
-    /* in [4096, SEQ_LEN] -> out [1024, SEQ_LEN - 6] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 6] */
     Conv1D(input, conv2_w, conv2_b, conv2_a);
     ReLU(conv2_a);
 
-    /* in [1024, SEQ_LEN - 6] -> out [1024] */
+    /* in [BS, 1024, SEQ_LEN - 6] -> out [BS, 1024] */
     GetMax(conv2_a, pool2_a);
 
-    /* in [4096, SEQ_LEN] -> out [1024, SEQ_LEN - 8] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 8] */
     Conv1D(input, conv3_w, conv3_b, conv3_a);
     ReLU(conv3_a);
 
-    /* in [1024, SEQ_LEN - 8] -> out [1024] */
+    /* in [BS, 1024, SEQ_LEN - 8] -> out [BS, 1024] */
     GetMax(conv3_a, pool3_a);
 
-    /* in [1024] +
-          [1024] +
-          [1024] +
-          [1024] -> out [1024 * 4] */
+    /* in [BS, 1024] +
+          [BS, 1024] +
+          [BS, 1024] +
+          [BS, 1024] -> out [BS, 1024 * 4] */
     Concat(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
-    /* in [1024 * 4] -> out [2048] */
+    /* in [BS, 1024 * 4] -> out [BS, 2048] */
     MoE(concat_a, moe_exp0_w, moe_exp0_b, moe_exp1_w, moe_exp1_b,
       moe_exp2_w, moe_exp2_b, moe_exp3_w, moe_exp3_b, moe_gate_w,
       moe_gate_b, moe_a);
 
-    /* in [2048] -> out [1024] */
+    /* in [BS, 2048] -> out [BS, 1024] */
     Linear(moe_a, linear0_w, linear0_b, linear0_a);
     ReLU(linear0_a);
 
-    /* in [1024] -> out [512] */
+    /* in [BS, 1024] -> out [BS, 512] */
     Linear(linear0_a, linear1_w, linear1_b, linear1_a);
     ReLU(linear1_a);
 
-    /* in [512] -> out [2] */
+    /* in [BS, 512] -> out [BS, 2] */
     Linear(linear1_a, linear2_w, linear2_b, linear2_a);
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 
@@ -281,6 +285,8 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     */
      
     /* Copy the computation result to the outputs */
-    memcpy(outputs + n * 2, linear2_a->buf, 2 * sizeof(float));
+    for (size_t b = 0; b < BS; b++) {
+      memcpy(outputs + (start + b) * 2, linear2_a->buf + b * 2, 2 * sizeof(float));
+    }
   }
 }
