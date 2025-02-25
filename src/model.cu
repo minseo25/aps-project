@@ -3,7 +3,7 @@
 #include "layer.h"
 #include "model.h"
 
-#define BATCH_SIZE 2
+#define BATCH_SIZE 128
 
 /* [Model Parameters]
  * _w: Weight parameter
@@ -146,7 +146,6 @@ void alloc_activations() {
   pool3_a = new Activation({BATCH_SIZE, 1024});
   concat_a = new Activation({BATCH_SIZE, 4096});
   gate_a = new Activation({BATCH_SIZE, 4}); 
-  // topk_val_a = new Activation({2});
   expert0_a = new Activation({BATCH_SIZE, 2048});
   expert1_a = new Activation({BATCH_SIZE, 2048});
   expert2_a = new Activation({BATCH_SIZE, 2048});
@@ -168,7 +167,6 @@ void free_activations() {
   delete pool3_a;
   delete concat_a;
   delete gate_a;
-  // delete topk_val_a;
   delete expert0_a;
   delete expert1_a;
   delete moe_a;
@@ -198,26 +196,26 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
          Parameter *gate_w, Parameter *gate_b, Activation *out) {
 
   /* 1. Compute the gate logits: in [BS, 4096] -> out [BS, 4] */
-  Linear(in, gate_w, gate_b, gate_a);
+  Linear_CUDA(in, gate_w, gate_b, gate_a);
 
   /* 2. Compute the softmax of the gate logits: in [BS, 4] -> out [BS, 4] */
-  Softmax(gate_a);
+  Softmax_CUDA(gate_a);
 
   /* 3. Compute the expert's output: in [BS, 4096] -> out [BS, 2048] */
-  Linear(in, exp0_w, exp0_b, expert0_a);
-  Linear(in, exp1_w, exp1_b, expert1_a);
-  Linear(in, exp2_w, exp2_b, expert2_a);
-  Linear(in, exp3_w, exp3_b, expert3_a);
+  Linear_CUDA(in, exp0_w, exp0_b, expert0_a);
+  Linear_CUDA(in, exp1_w, exp1_b, expert1_a);
+  Linear_CUDA(in, exp2_w, exp2_b, expert2_a);
+  Linear_CUDA(in, exp3_w, exp3_b, expert3_a);
 
   /* 4. Scale the expert's output: in [BS, 2048] -> out [BS, 2048] */
-  Scaling(expert0_a, gate_a->buf, 0);
-  Scaling(expert1_a, gate_a->buf, 1);
-  Scaling(expert2_a, gate_a->buf, 2);
-  Scaling(expert3_a, gate_a->buf, 3);
+  Scaling_CUDA(expert0_a, gate_a, 0);
+  Scaling_CUDA(expert1_a, gate_a, 1);
+  Scaling_CUDA(expert2_a, gate_a, 2);
+  Scaling_CUDA(expert3_a, gate_a, 3);
 
   /* 5. Accumulate the expert's output:
     * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [BS, 2048] */
-  Add(expert0_a, expert1_a, expert2_a, expert3_a, out);
+  Add_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, out);
 }
 
 /* [Model Computation: Sentiment Analysis Task] */
@@ -230,38 +228,38 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     Tensor *input = new Tensor({BS, 4096, SEQ_LEN}, inputs + start * SEQ_LEN * 4096); 
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 2] */
-    Conv1D(input, conv0_w, conv0_b, conv0_a);
-    ReLU(conv0_a); 
+    Conv1D_CUDA(input, conv0_w, conv0_b, conv0_a);
+    ReLU_CUDA(conv0_a); 
 
     /* in [BS, 1024, SEQ_LEN - 2] -> out [BS, 1024] */
-    GetMax(conv0_a, pool0_a);
+    GetMax_CUDA(conv0_a, pool0_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 4] */
-    Conv1D(input, conv1_w, conv1_b, conv1_a);
-    ReLU(conv1_a);
+    Conv1D_CUDA(input, conv1_w, conv1_b, conv1_a);
+    ReLU_CUDA(conv1_a);
 
     /* in [BS, 1024, SEQ_LEN - 4] -> out [BS, 1024] */
-    GetMax(conv1_a, pool1_a);
+    GetMax_CUDA(conv1_a, pool1_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 6] */
-    Conv1D(input, conv2_w, conv2_b, conv2_a);
-    ReLU(conv2_a);
+    Conv1D_CUDA(input, conv2_w, conv2_b, conv2_a);
+    ReLU_CUDA(conv2_a);
 
     /* in [BS, 1024, SEQ_LEN - 6] -> out [BS, 1024] */
-    GetMax(conv2_a, pool2_a);
+    GetMax_CUDA(conv2_a, pool2_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 8] */
-    Conv1D(input, conv3_w, conv3_b, conv3_a);
-    ReLU(conv3_a);
+    Conv1D_CUDA(input, conv3_w, conv3_b, conv3_a);
+    ReLU_CUDA(conv3_a);
 
     /* in [BS, 1024, SEQ_LEN - 8] -> out [BS, 1024] */
-    GetMax(conv3_a, pool3_a);
+    GetMax_CUDA(conv3_a, pool3_a);
 
     /* in [BS, 1024] +
           [BS, 1024] +
           [BS, 1024] +
           [BS, 1024] -> out [BS, 1024 * 4] */
-    Concat(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
+    Concat_CUDA(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
     /* in [BS, 1024 * 4] -> out [BS, 2048] */
     MoE(concat_a, moe_exp0_w, moe_exp0_b, moe_exp1_w, moe_exp1_b,
@@ -269,21 +267,22 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
       moe_gate_b, moe_a);
 
     /* in [BS, 2048] -> out [BS, 1024] */
-    Linear(moe_a, linear0_w, linear0_b, linear0_a);
-    ReLU(linear0_a);
+    Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a);
+    ReLU_CUDA(linear0_a);
 
     /* in [BS, 1024] -> out [BS, 512] */
-    Linear(linear0_a, linear1_w, linear1_b, linear1_a);
-    ReLU(linear1_a);
+    Linear_CUDA(linear0_a, linear1_w, linear1_b, linear1_a);
+    ReLU_CUDA(linear1_a);
 
     /* in [BS, 512] -> out [BS, 2] */
-    Linear(linear1_a, linear2_w, linear2_b, linear2_a);
+    Linear_CUDA(linear1_a, linear2_w, linear2_b, linear2_a);
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 
       for each sentiment class (0: negative, 1: positive). To determine 
       the sentiment, we can simply take the argmax of these probabilities. 
     */
-     
+    linear2_a->to_host();
+
     /* Copy the computation result to the outputs */
     for (size_t b = 0; b < BS; b++) {
       memcpy(outputs + (start + b) * 2, linear2_a->buf + b * 2, 2 * sizeof(float));

@@ -14,6 +14,7 @@ Tensor::Tensor(const vector<size_t> &shape_) {
   for (size_t i = 0; i < ndim; i++) { shape[i] = shape_[i]; }
   size_t bufsize = num_elem() * sizeof(float);
   CHECK_CUDA(cudaMallocHost(&buf, bufsize));
+  CHECK_CUDA(cudaMalloc(&d_buf, bufsize));
   memset(buf, 0, bufsize);
 }
 
@@ -22,15 +23,29 @@ Tensor::Tensor(const vector<size_t> &shape_, float *buf_) {
   for (size_t i = 0; i < ndim; i++) { shape[i] = shape_[i]; }
   size_t bufsize = num_elem() * sizeof(float);
   CHECK_CUDA(cudaMallocHost(&buf, bufsize));
+  CHECK_CUDA(cudaMalloc(&d_buf, bufsize));
+
   memcpy(buf, buf_, bufsize);
+  CHECK_CUDA(cudaMemcpy(d_buf, buf, bufsize, cudaMemcpyHostToDevice));
 }
 
 Tensor::~Tensor() {
   if (buf != nullptr) CHECK_CUDA(cudaFreeHost(buf));
+  if (d_buf != nullptr) CHECK_CUDA(cudaFree(d_buf));
 }
 
 size_t Tensor::num_elem() {
   size_t size = 1;
   for (size_t i = 0; i < ndim; i++) { size *= shape[i]; }
   return size;
+}
+
+void Tensor::to_device() {
+  size_t bufsize = num_elem() * sizeof(float);
+  CHECK_CUDA(cudaMemcpy(d_buf, buf, bufsize, cudaMemcpyHostToDevice));
+}
+
+void Tensor::to_host() {
+  size_t bufsize = num_elem() * sizeof(float);
+  CHECK_CUDA(cudaMemcpy(buf, d_buf, bufsize, cudaMemcpyDeviceToHost));
 }

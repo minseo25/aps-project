@@ -31,12 +31,15 @@ using namespace half_float::literal;
 struct Tensor {
   size_t ndim = 0;
   size_t shape[4] = {1, 1, 1, 1};
-  float *buf = nullptr;
+  float *buf = nullptr; // host buffer
+  float *d_buf = nullptr; // device buffer
 
   Tensor(const vector<size_t> &shape_);
   Tensor(const vector<size_t> &shape_, float *buf_);
   ~Tensor();
 
+  void to_device();
+  void to_host();
   size_t num_elem();
 };
 
