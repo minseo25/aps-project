@@ -41,14 +41,14 @@ __global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) Conv1DKernel(float *i
 
   float val = 0.f;
   
-  __shared__ float in_shared[BLOCK_SIZE * BLOCK_SIZE];
-  __shared__ float w_shared[BLOCK_SIZE * BLOCK_SIZE];
+  __shared__ float in_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
+  __shared__ float w_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
 
   for (size_t blk_i = 0; blk_i < CK; blk_i += BLOCK_SIZE) {
-    in_shared[threadRow * BLOCK_SIZE + threadCol] = 
+    in_shared[threadRow][threadCol] = 
         (cRow * BLOCK_SIZE + threadRow >= BSOS || blk_i + threadCol >= CK) ? 
         0.0f : in[threadRow * CK + threadCol];
-    w_shared[threadRow * BLOCK_SIZE + threadCol] = 
+    w_shared[threadRow][threadCol] = 
         (cCol * BLOCK_SIZE + threadRow >= OC || blk_i + threadCol >= CK) ? 
         0.0f : w[threadRow * CK + threadCol];
     __syncthreads();
@@ -57,8 +57,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) Conv1DKernel(float *i
     w += BLOCK_SIZE;
 
     for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
-      val += in_shared[threadRow * BLOCK_SIZE + dot_i] * 
-             w_shared[threadCol * BLOCK_SIZE + dot_i];
+      val += in_shared[threadRow][dot_i] * 
+             w_shared[threadCol][dot_i];
     }
     __syncthreads();
   }
@@ -232,14 +232,14 @@ __global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) LinearKernel(float *i
 
     float val = 0.f;
 
-    __shared__ float in_shared[BLOCK_SIZE * BLOCK_SIZE];
-    __shared__ float w_shared[BLOCK_SIZE * BLOCK_SIZE];
+    __shared__ float in_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
+    __shared__ float w_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
 
     for (size_t blk_i = 0; blk_i < N; blk_i += BLOCK_SIZE) {
-        in_shared[threadRow * BLOCK_SIZE + threadCol] = 
+        in_shared[threadRow][threadCol] = 
             (cRow * BLOCK_SIZE + threadRow >= BS || blk_i + threadCol >= N) ? 
             0.0f : in[threadRow * N + threadCol];
-        w_shared[threadRow * BLOCK_SIZE + threadCol] = 
+        w_shared[threadRow][threadCol] = 
             (cCol * BLOCK_SIZE + threadRow >= M || blk_i + threadCol >= N) ? 
             0.0f : w[threadRow * N + threadCol];
         __syncthreads();
@@ -248,8 +248,8 @@ __global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) LinearKernel(float *i
         w += BLOCK_SIZE;
 
         for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
-            val += in_shared[threadRow * BLOCK_SIZE + dot_i] * 
-                   w_shared[threadCol * BLOCK_SIZE + dot_i];
+            val += in_shared[threadRow][dot_i] * 
+                   w_shared[threadCol][dot_i];
         }
         __syncthreads();
     }
