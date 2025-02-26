@@ -3,7 +3,7 @@
 #include "layer.h"
 #include "model.h"
 
-#define BATCH_SIZE 128
+#define BATCH_SIZE 256
 
 /* [Model Parameters]
  * _w: Weight parameter
@@ -28,22 +28,22 @@ Parameter *linear2_w, *linear2_b;
 void alloc_and_set_parameters(float *param, size_t param_size) {
   size_t pos = 0;
 
-  conv0_w = new Parameter({1024, 4096, 3}, param + pos);
+  conv0_w = new Parameter({1024, 4096 * 3}, param + pos);
   pos += 1024 * 4096 * 3; 
   conv0_b = new Parameter({1024}, param + pos);
   pos += 1024;
 
-  conv1_w = new Parameter({1024, 4096, 5}, param + pos);
+  conv1_w = new Parameter({1024, 4096 * 5}, param + pos);
   pos += 1024 * 4096 * 5; 
   conv1_b = new Parameter({1024}, param + pos);
   pos += 1024;
 
-  conv2_w = new Parameter({1024, 4096, 7}, param + pos);
+  conv2_w = new Parameter({1024, 4096 * 7}, param + pos);
   pos += 1024 * 4096 * 7;
   conv2_b = new Parameter({1024}, param + pos);
   pos += 1024;
 
-  conv3_w = new Parameter({1024, 4096, 9}, param + pos);
+  conv3_w = new Parameter({1024, 4096 * 9}, param + pos);
   pos += 1024 * 4096 * 9;
   conv3_b = new Parameter({1024}, param + pos);
   pos += 1024;
@@ -95,6 +95,33 @@ void alloc_and_set_parameters(float *param, size_t param_size) {
   }
 }
 
+void send_parameters_to_device() {
+  conv0_w->to_device();
+  conv0_b->to_device();
+  conv1_w->to_device();
+  conv1_b->to_device();
+  conv2_w->to_device();
+  conv2_b->to_device();
+  conv3_w->to_device();
+  conv3_b->to_device();
+  moe_exp0_w->to_device();
+  moe_exp0_b->to_device();
+  moe_exp1_w->to_device();
+  moe_exp1_b->to_device();
+  moe_exp2_w->to_device();
+  moe_exp2_b->to_device();
+  moe_exp3_w->to_device();
+  moe_exp3_b->to_device();
+  moe_gate_w->to_device();
+  moe_gate_b->to_device();
+  linear0_w->to_device();
+  linear0_b->to_device();
+  linear1_w->to_device();
+  linear1_b->to_device();
+  linear2_w->to_device();
+  linear2_b->to_device();
+}
+
 void free_parameters() {
   delete conv0_w;
   delete conv0_b;
@@ -122,9 +149,13 @@ void free_parameters() {
   delete linear2_b;
 }
 
+/* [Model Inputs] */
+Tensor *input;
+
 /* [Model Activations] 
  * _a: Activation buffer
  */
+Activation *unrolled_input0, *unrolled_input1, *unrolled_input2, *unrolled_input3;
 Activation *conv0_a, *relu0_a, *pool0_a;
 Activation *conv1_a, *relu1_a, *pool1_a;
 Activation *conv2_a, *relu2_a, *pool2_a;
@@ -136,6 +167,11 @@ Activation *moe_a;
 Activation *linear0_a, *linear1_a, *linear2_a;
 
 void alloc_activations() {
+  input = new Tensor({BATCH_SIZE, 4096, SEQ_LEN});
+  unrolled_input0 = new Activation({BATCH_SIZE, 4096 * 3, SEQ_LEN - 2});
+  unrolled_input1 = new Activation({BATCH_SIZE, 4096 * 5, SEQ_LEN - 4});
+  unrolled_input2 = new Activation({BATCH_SIZE, 4096 * 7, SEQ_LEN - 6});
+  unrolled_input3 = new Activation({BATCH_SIZE, 4096 * 9, SEQ_LEN - 8});
   conv0_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 2});
   pool0_a = new Activation({BATCH_SIZE, 1024});
   conv1_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 4});
@@ -220,36 +256,48 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
 
 /* [Model Computation: Sentiment Analysis Task] */
 void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
+  // load parameters to device
+  send_parameters_to_device();
+
   int n_batches = (n_samples + BATCH_SIZE - 1) / BATCH_SIZE;
   for (int n = 0; n < n_batches; n++) {
     /* Load a sentence from the inputs */
     size_t start = n * BATCH_SIZE;
     size_t BS = (n == n_batches - 1) ? n_samples - start : BATCH_SIZE; // batch size
-    Tensor *input = new Tensor({BS, 4096, SEQ_LEN}, inputs + start * SEQ_LEN * 4096); 
+    // Tensor *input = new Tensor({BS, 4096, SEQ_LEN}, inputs + start * SEQ_LEN * 4096); 
+    input->to_device_with_shape(inputs + start * SEQ_LEN * 4096, BS, 4096, SEQ_LEN, 1);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 2] */
-    Conv1D_CUDA(input, conv0_w, conv0_b, conv0_a);
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 3, SEQ_LEN - 2] */
+    im2col_1d_CUDA(input, unrolled_input0, 3);
+    /* in [BS, 4096 * 3, SEQ_LEN - 2] -> out [BS, 1024, SEQ_LEN - 2] */
+    Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a);
     ReLU_CUDA(conv0_a); 
 
     /* in [BS, 1024, SEQ_LEN - 2] -> out [BS, 1024] */
     GetMax_CUDA(conv0_a, pool0_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 4] */
-    Conv1D_CUDA(input, conv1_w, conv1_b, conv1_a);
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 5, SEQ_LEN - 4] */
+    im2col_1d_CUDA(input, unrolled_input1, 5);
+    /* in [BS, 4096 * 5, SEQ_LEN - 4] -> out [BS, 1024, SEQ_LEN - 4] */
+    Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a);
     ReLU_CUDA(conv1_a);
 
     /* in [BS, 1024, SEQ_LEN - 4] -> out [BS, 1024] */
     GetMax_CUDA(conv1_a, pool1_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 6] */
-    Conv1D_CUDA(input, conv2_w, conv2_b, conv2_a);
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 7, SEQ_LEN - 6] */
+    im2col_1d_CUDA(input, unrolled_input2, 7);
+    /* in [BS, 4096 * 7, SEQ_LEN - 6] -> out [BS, 1024, SEQ_LEN - 6] */
+    Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a);
     ReLU_CUDA(conv2_a);
 
     /* in [BS, 1024, SEQ_LEN - 6] -> out [BS, 1024] */
     GetMax_CUDA(conv2_a, pool2_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 1024, SEQ_LEN - 8] */
-    Conv1D_CUDA(input, conv3_w, conv3_b, conv3_a);
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 9, SEQ_LEN - 8] */
+    im2col_1d_CUDA(input, unrolled_input3, 9);
+    /* in [BS, 4096 * 9, SEQ_LEN - 8] -> out [BS, 1024, SEQ_LEN - 8] */
+    Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a);
     ReLU_CUDA(conv3_a);
 
     /* in [BS, 1024, SEQ_LEN - 8] -> out [BS, 1024] */
