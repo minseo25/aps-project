@@ -264,7 +264,6 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     /* Load a sentence from the inputs */
     size_t start = n * BATCH_SIZE;
     size_t BS = (n == n_batches - 1) ? n_samples - start : BATCH_SIZE; // batch size
-    // Tensor *input = new Tensor({BS, 4096, SEQ_LEN}, inputs + start * SEQ_LEN * 4096); 
     input->to_device_with_shape(inputs + start * SEQ_LEN * 4096, BS, 4096, SEQ_LEN, 1);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 3, SEQ_LEN - 2] */
