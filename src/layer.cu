@@ -4,10 +4,10 @@
 #define BLOCK_SIZE 16
 
 /* Conv1D 
- * @param [in1]  in: [BS, C * K, os]
+ * @param [in1]  in: [BS, os, C * K] => [BS * os, C * K] 로 해석 가능
  * @param [in2]   w: [OC, C * K]
  * @param [in3]   b: [OC]
- * @param [out] out: [BS, OC, os]
+ * @param [out] out: [BS, os, OC]
  *    
  *    In this model, K is 3, 5, 7, or 9, 
  *    with stride = 1, pad = 0, dilation = 1.
@@ -23,31 +23,59 @@
  * 'os' is the output sequence length
  * 'K' is the kernel (or filter) size
  */
-__global__ void Conv1DKernel(float *in, float *w, float *b, float *out,
-                            size_t BS, size_t CK, size_t os, size_t OC) {
-  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= BS * OC * os) return;
+__global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) Conv1DKernel(float *in, float *w, float *b, float *out,
+                            size_t BSOS, size_t CK, size_t OC) {
+  // out idx
+  int row = blockIdx.x * BLOCK_SIZE + threadIdx.x / BLOCK_SIZE;
+  int col = blockIdx.y * BLOCK_SIZE + threadIdx.x % BLOCK_SIZE;
+  // block idx
+  int cRow = blockIdx.x;
+  int cCol = blockIdx.y;
+  // thread idx in block
+  int threadRow = threadIdx.x / BLOCK_SIZE;
+  int threadCol = threadIdx.x % BLOCK_SIZE;
 
-  size_t bs = idx / (OC * os);
-  size_t oc = (idx % (OC * os)) / os;
-  size_t j = idx % os;
+  in += cRow * BLOCK_SIZE * CK;
+  w += cCol * BLOCK_SIZE * CK;
+  out += cRow * BLOCK_SIZE * OC + cCol * BLOCK_SIZE;
 
   float val = 0.f;
-  for (size_t k = 0; k < CK; k++) {
-    val += in[bs * (CK * os) + k * os + j] * w[oc * CK + k];
+  
+  __shared__ float in_shared[BLOCK_SIZE * BLOCK_SIZE];
+  __shared__ float w_shared[BLOCK_SIZE * BLOCK_SIZE];
+
+  for (size_t blk_i = 0; blk_i < CK; blk_i += BLOCK_SIZE) {
+    in_shared[threadRow * BLOCK_SIZE + threadCol] = 
+        (cRow * BLOCK_SIZE + threadRow >= BSOS || blk_i + threadCol >= CK) ? 
+        0.0f : in[threadRow * CK + threadCol];
+    w_shared[threadRow * BLOCK_SIZE + threadCol] = 
+        (cCol * BLOCK_SIZE + threadRow >= OC || blk_i + threadCol >= CK) ? 
+        0.0f : w[threadRow * CK + threadCol];
+    __syncthreads();
+
+    in += BLOCK_SIZE;
+    w += BLOCK_SIZE;
+
+    for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
+      val += in_shared[threadRow * BLOCK_SIZE + dot_i] * 
+             w_shared[threadCol * BLOCK_SIZE + dot_i];
+    }
+    __syncthreads();
   }
-  out[idx] = val + b[oc];
+
+  if (row < BSOS && col < OC) {
+    out[threadRow * OC + threadCol] = val + b[col];
+  }
 }
 void Conv1D_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
   size_t BS = in->shape[0];
-  size_t CK = in->shape[1];
-  size_t os = in->shape[2];
+  size_t os = in->shape[1];
+  size_t CK = in->shape[2];
   size_t OC = w->shape[0];
 
-  dim3 blockDim(THREADS_PER_BLOCK);
-  dim3 gridDim((BS * OC * os + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
-  Conv1DKernel<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, 
-                                      BS, CK, os, OC);
+  dim3 blockDim(BLOCK_SIZE * BLOCK_SIZE);
+  dim3 gridDim((BS * os + BLOCK_SIZE - 1) / BLOCK_SIZE, (OC + BLOCK_SIZE - 1) / BLOCK_SIZE);
+  Conv1DKernel<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS * os, CK, OC);
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
@@ -73,55 +101,38 @@ void ReLU_CUDA(Tensor *inout) {
 }
 
 /* GetMax
- * @param [in]   in: [BS, C, s]
+ * @param [in]   in: [BS, s, C]
  * @param [out] out: [BS, C]
  *    
  *    This layer is to get the max value along the sequence dim.
  *    The formula for this layer: out = max(in, dim=-1)
  * 
  * 'BS' is the batch size
- * 'C' is the channel size
  * 's' is the sequence length
+ * 'C' is the channel size
  */
-void GetMax(Tensor *in, Tensor *out) {
-  size_t BS = in->shape[0];
-  size_t C = in->shape[1];
-  size_t s = in->shape[2];
-
-  for (size_t bs = 0; bs < BS; bs++) {
-    for (size_t c = 0; c < C; c++) {
-      out->buf[bs * C + c] = in->buf[bs * C * s + c * s];
-      for (size_t j = 1; j < s; j++) {
-        out->buf[bs * C + c] = in->buf[bs * C * s + c * s + j] > 
-          out->buf[bs * C + c] ? in->buf[bs * C * s + c * s + j] : 
-          out->buf[bs * C + c];
-      }
-    }
-  }
-}
-/* GetMax CUDA kernel */
-__global__ void GetMax_Kernel(float *in, float *out, size_t BS, size_t C, size_t s) {
+__global__ void GetMax_Kernel(float *in, float *out, size_t BS, size_t s, size_t C) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= BS * C) return;
   
   size_t bs = idx / C;
   size_t c = idx % C;
 
-  float max_val = in[bs * C * s + c * s];
+  float max_val = in[bs * C * s + c];
   for (size_t j = 1; j < s; j++) {
-    max_val = in[bs * C * s + c * s + j] > max_val ? in[bs * C * s + c * s + j] : max_val;
+    float val = in[bs * C * s + j * C + c];
+    max_val = val > max_val ? val : max_val;
   }
   out[bs * C + c] = max_val;
 }
-/* GetMax using CUDA */
 void GetMax_CUDA(Tensor *in, Tensor *out) {
   size_t BS = in->shape[0];
-  size_t C = in->shape[1];
-  size_t s = in->shape[2];
+  size_t s = in->shape[1];
+  size_t C = in->shape[2];
 
   dim3 blockDim(THREADS_PER_BLOCK);
   dim3 gridDim((BS * C + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
-  GetMax_Kernel<<<gridDim, blockDim>>>(in->d_buf, out->d_buf, BS, C, s);
+  GetMax_Kernel<<<gridDim, blockDim>>>(in->d_buf, out->d_buf, BS, s, C);
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
@@ -406,27 +417,30 @@ void Add_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
 
 /* im2col_1d_CUDA
  * @param [in]  in: [BS, C, s]
- * @param [out] out: [BS, C * K, os]
+ * @param [out] out: [BS, os, C * K]
  * 'K' is the kernel size
  * 'os' is the output sequence length
  */
-__global__ void im2col_1d_Kernel(float *in, float *out,
-                                size_t BS, size_t C, size_t s, size_t K, size_t os) {
+__global__ void im2col_1d_Kernel(const float *in, float *out,
+                                    size_t BS, size_t C, size_t s, size_t K, size_t os) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= BS * C * K * os) return;
-  
-  // 인덱스 계산
-  size_t bs = idx / (C * K * os);                    // 배치 인덱스
-  size_t remainder = idx % (C * K * os);
-  size_t ck = remainder / os;                        // C*K 차원에서의 위치
-  size_t j = remainder % os;                         // 출력 시퀀스 위치
-  size_t c = ck / K;                                // 채널 인덱스
-  size_t k = ck % K;                                // 커널 위치
+  if (idx >= BS * os * C * K) return;
 
-  // 입력값 복사
-  size_t in_idx = bs * (C * s) + c * s + (j + k);   // bs 배치, c 채널, 슬라이딩 윈도우의 시작위치(j) + 커널 위치(k)
-  size_t out_idx = bs * (C * K * os) + ck * os + j; // 출력 텐서에서의 위치
-  out[out_idx] = in[in_idx];
+  // 출력 텐서를 [BS*os, C*K]로 해석
+  size_t row = idx / (C * K);
+  size_t col = idx % (C * K);
+
+  // row를 분해: row = bs * os + j
+  size_t bs = row / os;
+  size_t j  = row % os;
+
+  // col을 분해: col = c * K + k
+  size_t c = col / K;
+  size_t k = col % K;
+
+  // in[bs, c, j+k]
+  size_t in_idx = bs * (C * s) + c * s + (j + k);
+  out[idx] = in[in_idx];
 }
 void im2col_1d_CUDA(Tensor *in, Tensor *out, size_t K) {
   size_t BS = in->shape[0];
@@ -435,7 +449,7 @@ void im2col_1d_CUDA(Tensor *in, Tensor *out, size_t K) {
   size_t os = s - K + 1;
 
   dim3 blockDim(THREADS_PER_BLOCK);
-  dim3 gridDim((BS * C * K * os + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
+  dim3 gridDim((BS * os * C * K + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
   im2col_1d_Kernel<<<gridDim, blockDim>>>(in->d_buf, out->d_buf, BS, C, s, K, os);
   CHECK_CUDA(cudaDeviceSynchronize());
 }

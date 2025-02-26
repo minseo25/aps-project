@@ -4,7 +4,6 @@
 
 
 /* Layers (Operations) */
-void GetMax(Tensor *in, Tensor *out);
 void Concat(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, 
             Tensor *out);
 void Softmax(Tensor *inout);
