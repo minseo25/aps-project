@@ -2,8 +2,8 @@
 
 
 /* Conv1D 
- * @param [in1]  in: [BS, C, s]
- * @param [in2]   w: [OC, C, K] 
+ * @param [in1]  in: [BS, C * K, os]
+ * @param [in2]   w: [OC, C * K]
  * @param [in3]   b: [OC]
  * @param [out] out: [BS, OC, os]
  *    
@@ -21,33 +21,8 @@
  * 'os' is the output sequence length
  * 'K' is the kernel (or filter) size
  */
-void Conv1D(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
-  size_t s = in->shape[2];
-  size_t C = in->shape[1];
-  size_t BS = in->shape[0];
-  size_t OC = w->shape[0];
-  size_t K = w->shape[2];
-  
-  size_t os = s - K + 1;
-
-  for (size_t bs = 0; bs < BS; bs++) {
-    for (size_t oc = 0; oc < OC; oc++) {
-      for (size_t j = 0; j < os; j++) {
-        float val = 0.f;
-        for (size_t k = 0; k < C; k++) {
-          for (size_t l = 0; l < K; l++) {
-            val += in->buf[bs * C * s + k * s + j + l] * 
-                    w->buf[oc * C * K + k * K + l];
-          }
-        }
-        out->buf[bs * OC * os + oc * os + j] = val + b->buf[oc];
-      }
-    }
-  }
-}
-/* Conv1D CUDA kernel */
 __global__ void Conv1DKernel(float *in, float *w, float *b, float *out,
-                            size_t BS, size_t C, size_t s, size_t OC, size_t K, size_t os) {
+                            size_t BS, size_t CK, size_t os, size_t OC) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= BS * OC * os) return;
 
@@ -56,26 +31,21 @@ __global__ void Conv1DKernel(float *in, float *w, float *b, float *out,
   size_t j = idx % os;
 
   float val = 0.f;
-  for (size_t k = 0; k < C; k++) {
-    for (size_t l = 0; l < K; l++) {
-      val += in[bs * C * s + k * s + j + l] * w[oc * C * K + k * K + l];
-    }
+  for (size_t k = 0; k < CK; k++) {
+    val += in[bs * (CK * os) + k * os + j] * w[oc * CK + k];
   }
   out[idx] = val + b[oc];
 }
-/* Conv1D using CUDA */
 void Conv1D_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
   size_t BS = in->shape[0];
-  size_t C = in->shape[1];
-  size_t s = in->shape[2];
+  size_t CK = in->shape[1];
+  size_t os = in->shape[2];
   size_t OC = w->shape[0];
-  size_t K = w->shape[2];
-  size_t os = s - K + 1;
 
   dim3 blockDim(256);
   dim3 gridDim((BS * OC * os + 255) / 256, 1);
   Conv1DKernel<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, 
-                                      BS, C, s, OC, K, os);
+                                      BS, CK, os, OC);
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
@@ -422,5 +392,41 @@ void Add_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
   dim3 blockDim(256);
   dim3 gridDim((BS * N + 255) / 256, 1);
   AddKernel<<<gridDim, blockDim>>>(in1->d_buf, in2->d_buf, in3->d_buf, in4->d_buf, out->d_buf, BS, N);
+  CHECK_CUDA(cudaDeviceSynchronize());
+}
+
+/* im2col_1d_CUDA
+ * @param [in]  in: [BS, C, s]
+ * @param [out] out: [BS, C * K, os]
+ * 'K' is the kernel size
+ * 'os' is the output sequence length
+ */
+__global__ void im2col_1d_Kernel(float *in, float *out,
+                                size_t BS, size_t C, size_t s, size_t K, size_t os) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= BS * C * K * os) return;
+  
+  // 인덱스 계산
+  size_t bs = idx / (C * K * os);                    // 배치 인덱스
+  size_t remainder = idx % (C * K * os);
+  size_t ck = remainder / os;                        // C*K 차원에서의 위치
+  size_t j = remainder % os;                         // 출력 시퀀스 위치
+  size_t c = ck / K;                                // 채널 인덱스
+  size_t k = ck % K;                                // 커널 위치
+
+  // 입력값 복사
+  size_t in_idx = bs * (C * s) + c * s + (j + k);   // bs 배치, c 채널, 슬라이딩 윈도우의 시작위치(j) + 커널 위치(k)
+  size_t out_idx = bs * (C * K * os) + ck * os + j; // 출력 텐서에서의 위치
+  out[out_idx] = in[in_idx];
+}
+void im2col_1d_CUDA(Tensor *in, Tensor *out, size_t K) {
+  size_t BS = in->shape[0];
+  size_t C = in->shape[1];
+  size_t s = in->shape[2];
+  size_t os = s - K + 1;
+
+  dim3 blockDim(256);
+  dim3 gridDim((BS * C * K * os + 255) / 256, 1);
+  im2col_1d_Kernel<<<gridDim, blockDim>>>(in->d_buf, out->d_buf, BS, C, s, K, os);
   CHECK_CUDA(cudaDeviceSynchronize());
 }

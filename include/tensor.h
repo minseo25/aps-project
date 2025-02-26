@@ -41,6 +41,7 @@ struct Tensor {
   void to_device();
   void to_host();
   size_t num_elem();
+  void to_device_with_shape(float *buf_, size_t shape1, size_t shape2, size_t shape3, size_t shape4);
 };
 
 typedef Tensor Parameter;

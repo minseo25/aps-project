@@ -24,9 +24,7 @@ Tensor::Tensor(const vector<size_t> &shape_, float *buf_) {
   size_t bufsize = num_elem() * sizeof(float);
   CHECK_CUDA(cudaMallocHost(&buf, bufsize));
   CHECK_CUDA(cudaMalloc(&d_buf, bufsize));
-
   memcpy(buf, buf_, bufsize);
-  CHECK_CUDA(cudaMemcpy(d_buf, buf, bufsize, cudaMemcpyHostToDevice));
 }
 
 Tensor::~Tensor() {
@@ -48,4 +46,13 @@ void Tensor::to_device() {
 void Tensor::to_host() {
   size_t bufsize = num_elem() * sizeof(float);
   CHECK_CUDA(cudaMemcpy(buf, d_buf, bufsize, cudaMemcpyDeviceToHost));
+}
+
+void Tensor::to_device_with_shape(float *buf_, size_t shape1, size_t shape2, size_t shape3, size_t shape4) {
+  shape[0] = shape1;
+  shape[1] = shape2;
+  shape[2] = shape3;
+  shape[3] = shape4;
+  size_t bufsize = num_elem() * sizeof(float);
+  CHECK_CUDA(cudaMemcpy(d_buf, buf_, bufsize, cudaMemcpyHostToDevice));
 }
