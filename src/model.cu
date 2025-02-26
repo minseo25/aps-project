@@ -141,17 +141,17 @@ Activation *linear0_a, *linear1_a, *linear2_a;
 
 void alloc_activations() {
   input = new Tensor({BATCH_SIZE, 4096, SEQ_LEN});
-  unrolled_input0 = new Activation({BATCH_SIZE, 4096 * 3, SEQ_LEN - 2});
-  unrolled_input1 = new Activation({BATCH_SIZE, 4096 * 5, SEQ_LEN - 4});
-  unrolled_input2 = new Activation({BATCH_SIZE, 4096 * 7, SEQ_LEN - 6});
-  unrolled_input3 = new Activation({BATCH_SIZE, 4096 * 9, SEQ_LEN - 8});
-  conv0_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 2});
+  unrolled_input0 = new Activation({BATCH_SIZE, SEQ_LEN - 2, 4096 * 3});
+  unrolled_input1 = new Activation({BATCH_SIZE, SEQ_LEN - 4, 4096 * 5});
+  unrolled_input2 = new Activation({BATCH_SIZE, SEQ_LEN - 6, 4096 * 7});
+  unrolled_input3 = new Activation({BATCH_SIZE, SEQ_LEN - 8, 4096 * 9});
+  conv0_a = new Activation({BATCH_SIZE, SEQ_LEN - 2, 1024});
   pool0_a = new Activation({BATCH_SIZE, 1024});
-  conv1_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 4});
+  conv1_a = new Activation({BATCH_SIZE, SEQ_LEN - 4, 1024});
   pool1_a = new Activation({BATCH_SIZE, 1024});
-  conv2_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 6});
+  conv2_a = new Activation({BATCH_SIZE, SEQ_LEN - 6, 1024});
   pool2_a = new Activation({BATCH_SIZE, 1024});
-  conv3_a = new Activation({BATCH_SIZE, 1024, SEQ_LEN - 8});
+  conv3_a = new Activation({BATCH_SIZE, SEQ_LEN - 8, 1024});
   pool3_a = new Activation({BATCH_SIZE, 1024});
   concat_a = new Activation({BATCH_SIZE, 4096});
   gate_a = new Activation({BATCH_SIZE, 4}); 
@@ -237,40 +237,40 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     size_t BS = (n == n_batches - 1) ? n_samples - start : BATCH_SIZE; // batch size
     input->to_device_with_shape(inputs + start * SEQ_LEN * 4096, BS, 4096, SEQ_LEN, 1);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 3, SEQ_LEN - 2] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 2, 4096 * 3] */
     im2col_1d_CUDA(input, unrolled_input0, 3);
-    /* in [BS, 4096 * 3, SEQ_LEN - 2] -> out [BS, 1024, SEQ_LEN - 2] */
+    /* in [BS, SEQ_LEN - 2, 4096 * 3] -> out [BS, SEQ_LEN - 2, 1024] */
     Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a);
     ReLU_CUDA(conv0_a); 
 
-    /* in [BS, 1024, SEQ_LEN - 2] -> out [BS, 1024] */
+    /* in [BS, SEQ_LEN - 2, 1024] -> out [BS, 1024] */
     GetMax_CUDA(conv0_a, pool0_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 5, SEQ_LEN - 4] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 4, 4096 * 5] */
     im2col_1d_CUDA(input, unrolled_input1, 5);
-    /* in [BS, 4096 * 5, SEQ_LEN - 4] -> out [BS, 1024, SEQ_LEN - 4] */
+    /* in [BS, SEQ_LEN - 4, 4096 * 5] -> out [BS, SEQ_LEN - 4, 1024] */
     Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a);
     ReLU_CUDA(conv1_a);
 
-    /* in [BS, 1024, SEQ_LEN - 4] -> out [BS, 1024] */
+    /* in [BS, SEQ_LEN - 4, 1024] -> out [BS, 1024] */
     GetMax_CUDA(conv1_a, pool1_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 7, SEQ_LEN - 6] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 6, 4096 * 7] */
     im2col_1d_CUDA(input, unrolled_input2, 7);
-    /* in [BS, 4096 * 7, SEQ_LEN - 6] -> out [BS, 1024, SEQ_LEN - 6] */
+    /* in [BS, SEQ_LEN - 6, 4096 * 7] -> out [BS, SEQ_LEN - 6, 1024] */
     Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a);
     ReLU_CUDA(conv2_a);
 
-    /* in [BS, 1024, SEQ_LEN - 6] -> out [BS, 1024] */
+    /* in [BS, SEQ_LEN - 6, 1024] -> out [BS, 1024] */
     GetMax_CUDA(conv2_a, pool2_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, 4096 * 9, SEQ_LEN - 8] */
+    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 8, 4096 * 9] */
     im2col_1d_CUDA(input, unrolled_input3, 9);
-    /* in [BS, 4096 * 9, SEQ_LEN - 8] -> out [BS, 1024, SEQ_LEN - 8] */
+    /* in [BS, SEQ_LEN - 8, 4096 * 9] -> out [BS, SEQ_LEN - 8, 1024] */
     Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a);
     ReLU_CUDA(conv3_a);
 
-    /* in [BS, 1024, SEQ_LEN - 8] -> out [BS, 1024] */
+    /* in [BS, SEQ_LEN - 8, 1024] -> out [BS, 1024] */
     GetMax_CUDA(conv3_a, pool3_a);
 
     /* in [BS, 1024] +
