@@ -95,33 +95,6 @@ void alloc_and_set_parameters(float *param, size_t param_size) {
   }
 }
 
-void send_parameters_to_device() {
-  conv0_w->to_device();
-  conv0_b->to_device();
-  conv1_w->to_device();
-  conv1_b->to_device();
-  conv2_w->to_device();
-  conv2_b->to_device();
-  conv3_w->to_device();
-  conv3_b->to_device();
-  moe_exp0_w->to_device();
-  moe_exp0_b->to_device();
-  moe_exp1_w->to_device();
-  moe_exp1_b->to_device();
-  moe_exp2_w->to_device();
-  moe_exp2_b->to_device();
-  moe_exp3_w->to_device();
-  moe_exp3_b->to_device();
-  moe_gate_w->to_device();
-  moe_gate_b->to_device();
-  linear0_w->to_device();
-  linear0_b->to_device();
-  linear1_w->to_device();
-  linear1_b->to_device();
-  linear2_w->to_device();
-  linear2_b->to_device();
-}
-
 void free_parameters() {
   delete conv0_w;
   delete conv0_b;
@@ -193,6 +166,7 @@ void alloc_activations() {
 }
 
 void free_activations() {
+  delete input;
   delete conv0_a;
   delete pool0_a;
   delete conv1_a;
@@ -256,9 +230,6 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
 
 /* [Model Computation: Sentiment Analysis Task] */
 void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
-  // load parameters to device
-  send_parameters_to_device();
-
   int n_batches = (n_samples + BATCH_SIZE - 1) / BATCH_SIZE;
   for (int n = 0; n < n_batches; n++) {
     /* Load a sentence from the inputs */
