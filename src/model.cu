@@ -3,7 +3,7 @@
 #include "layer.h"
 #include "model.h"
 
-#define BATCH_SIZE 256
+#define BATCH_SIZE 128
 
 /* [Model Parameters]
  * _w: Weight parameter
@@ -227,16 +227,16 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
          Parameter *gate_w, Parameter *gate_b, Activation *out) {
 
   /* 1. Compute the gate logits: in [BS, 4096] -> out [BS, 4] */
-  Linear_CUDA_slow(in, gate_w, gate_b, gate_a, false, stream9);
+  Linear_CUDA_slow_moe(in, gate_w, gate_b, gate_a, false, stream9);
 
   /* 2. Compute the softmax of the gate logits: in [BS, 4] -> out [BS, 4] */
   Softmax_CUDA(gate_a, stream9);
 
   /* 3. Compute the expert's output: in [BS, 4096] -> out [BS, 2048] */
-  Linear_CUDA_slow(in, exp0_w, exp0_b, expert0_a, false, stream5);
-  Linear_CUDA_slow(in, exp1_w, exp1_b, expert1_a, false, stream6);
-  Linear_CUDA_slow(in, exp2_w, exp2_b, expert2_a, false, stream7);
-  Linear_CUDA_slow(in, exp3_w, exp3_b, expert3_a, false, stream8);
+  Linear_CUDA_slow_moe(in, exp0_w, exp0_b, expert0_a, false, stream5);
+  Linear_CUDA_slow_moe(in, exp1_w, exp1_b, expert1_a, false, stream6);
+  Linear_CUDA_slow_moe(in, exp2_w, exp2_b, expert2_a, false, stream7);
+  Linear_CUDA_slow_moe(in, exp3_w, exp3_b, expert3_a, false, stream8);
 
   CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -321,11 +321,11 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a, true);
 
     /* in [BS, 1024] -> out [BS, 512] */
-    Linear_CUDA_slow(linear0_a, linear1_w, linear1_b, linear1_a, true, stream5);
+    Linear_CUDA_slow_fc(linear0_a, linear1_w, linear1_b, linear1_a, true, stream5);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     /* in [BS, 512] -> out [BS, 2] */
-    Linear_CUDA_slow(linear1_a, linear2_w, linear2_b, linear2_a, false, stream5);
+    Linear_CUDA_slow_fc(linear1_a, linear2_w, linear2_b, linear2_a, false, stream5);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 

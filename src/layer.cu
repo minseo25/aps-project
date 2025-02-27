@@ -1,43 +1,46 @@
 #include "layer.h"
 
 #define THREADS_PER_BLOCK 512
-#define BLOCK_SIZE 16
+#define MOE_BLOCK_SIZE_X 16
+#define MOE_BLOCK_SIZE_Y 16
+#define FC_BLOCK_SIZE_X 16
+#define FC_BLOCK_SIZE_Y 16
 
-__global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) matmul(float *A, float *B, float *b, float *out,
-                            size_t M, size_t K, size_t N) {
+__global__ void __launch_bounds__(256) matmul(float *A, float *B, float *b, float *out,
+                            size_t M, size_t K, size_t N, int BLOCK_SIZE_X, int BLOCK_SIZE_Y) {
     // A: [M, K] , B: [N, K] , b: [M] , out: [M, N]
     // out idx
-    int row = blockIdx.x * BLOCK_SIZE + threadIdx.x / BLOCK_SIZE;
-    int col = blockIdx.y * BLOCK_SIZE + threadIdx.x % BLOCK_SIZE;
+    int row = blockIdx.x * BLOCK_SIZE_X + threadIdx.x / BLOCK_SIZE_Y;
+    int col = blockIdx.y * BLOCK_SIZE_Y + threadIdx.x % BLOCK_SIZE_Y;
     // block idx
     int cRow = blockIdx.x;
     int cCol = blockIdx.y;
     // thread idx in block
-    int threadRow = threadIdx.x / BLOCK_SIZE;
-    int threadCol = threadIdx.x % BLOCK_SIZE;
+    int threadRow = threadIdx.x / BLOCK_SIZE_Y;
+    int threadCol = threadIdx.x % BLOCK_SIZE_Y;
 
-    A += cRow * BLOCK_SIZE * K;
-    B += cCol * BLOCK_SIZE * K;
-    out += cRow * BLOCK_SIZE * N + cCol * BLOCK_SIZE;
+    A += cRow * BLOCK_SIZE_X * K;
+    B += cCol * BLOCK_SIZE_Y * K;
+    out += cRow * BLOCK_SIZE_X * N + cCol * BLOCK_SIZE_Y;
 
     float val = 0.f;
 
-    __shared__ float A_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
-    __shared__ float B_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
+    __shared__ float A_shared[32][33];  // Use max block size
+    __shared__ float B_shared[32][33];
 
-    for (size_t blk_i = 0; blk_i < K; blk_i += BLOCK_SIZE) {
+    for (size_t blk_i = 0; blk_i < K; blk_i += BLOCK_SIZE_Y) {
         A_shared[threadRow][threadCol] = 
-            (cRow * BLOCK_SIZE + threadRow >= M || blk_i + threadCol >= K) ? 
+            (cRow * BLOCK_SIZE_X + threadRow >= M || blk_i + threadCol >= K) ? 
             0.0f : A[threadRow * K + threadCol];
         B_shared[threadRow][threadCol] = 
-            (cCol * BLOCK_SIZE + threadRow >= N || blk_i + threadCol >= K) ? 
+            (cCol * BLOCK_SIZE_Y + threadRow >= N || blk_i + threadCol >= K) ? 
             0.0f : B[threadRow * K + threadCol];
         __syncthreads();
 
-        A += BLOCK_SIZE;
-        B += BLOCK_SIZE;
+        A += BLOCK_SIZE_Y;
+        B += BLOCK_SIZE_Y;
 
-        for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
+        for (size_t dot_i = 0; dot_i < BLOCK_SIZE_Y; dot_i++) {
           val += A_shared[threadRow][dot_i] * B_shared[threadCol][dot_i];
         }
         __syncthreads();
@@ -47,41 +50,41 @@ __global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) matmul(float *A, floa
         out[threadRow * N + threadCol] = val + b[col];
     }
 }
-__global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) matmul_relu(float *A, float *B, float *b, float *out,
-                            size_t M, size_t K, size_t N) {
+__global__ void __launch_bounds__(256) matmul_relu(float *A, float *B, float *b, float *out,
+                            size_t M, size_t K, size_t N, int BLOCK_SIZE_X, int BLOCK_SIZE_Y) {
     // A: [M, K] , B: [N, K] , b: [M] , out: [M, N]
     // out idx
-    int row = blockIdx.x * BLOCK_SIZE + threadIdx.x / BLOCK_SIZE;
-    int col = blockIdx.y * BLOCK_SIZE + threadIdx.x % BLOCK_SIZE;
+    int row = blockIdx.x * BLOCK_SIZE_X + threadIdx.x / BLOCK_SIZE_Y;
+    int col = blockIdx.y * BLOCK_SIZE_Y + threadIdx.x % BLOCK_SIZE_Y;
     // block idx
     int cRow = blockIdx.x;
     int cCol = blockIdx.y;
     // thread idx in block
-    int threadRow = threadIdx.x / BLOCK_SIZE;
-    int threadCol = threadIdx.x % BLOCK_SIZE;
+    int threadRow = threadIdx.x / BLOCK_SIZE_Y;
+    int threadCol = threadIdx.x % BLOCK_SIZE_Y;
 
-    A += cRow * BLOCK_SIZE * K;
-    B += cCol * BLOCK_SIZE * K;
-    out += cRow * BLOCK_SIZE * N + cCol * BLOCK_SIZE;
+    A += cRow * BLOCK_SIZE_X * K;
+    B += cCol * BLOCK_SIZE_Y * K;
+    out += cRow * BLOCK_SIZE_X * N + cCol * BLOCK_SIZE_Y;
 
     float val = 0.f;
 
-    __shared__ float A_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
-    __shared__ float B_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
+    __shared__ float A_shared[32][33];  // Use max block size
+    __shared__ float B_shared[32][33];
 
-    for (size_t blk_i = 0; blk_i < K; blk_i += BLOCK_SIZE) {
+    for (size_t blk_i = 0; blk_i < K; blk_i += BLOCK_SIZE_Y) {
         A_shared[threadRow][threadCol] = 
-            (cRow * BLOCK_SIZE + threadRow >= M || blk_i + threadCol >= K) ? 
+            (cRow * BLOCK_SIZE_X + threadRow >= M || blk_i + threadCol >= K) ? 
             0.0f : A[threadRow * K + threadCol];
         B_shared[threadRow][threadCol] = 
-            (cCol * BLOCK_SIZE + threadRow >= N || blk_i + threadCol >= K) ? 
+            (cCol * BLOCK_SIZE_Y + threadRow >= N || blk_i + threadCol >= K) ? 
             0.0f : B[threadRow * K + threadCol];
         __syncthreads();
 
-        A += BLOCK_SIZE;
-        B += BLOCK_SIZE;
+        A += BLOCK_SIZE_Y;
+        B += BLOCK_SIZE_Y;
 
-        for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
+        for (size_t dot_i = 0; dot_i < BLOCK_SIZE_Y; dot_i++) {
           val += A_shared[threadRow][dot_i] * B_shared[threadCol][dot_i];
         }
         __syncthreads();
@@ -776,17 +779,31 @@ void Concat_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
  * 'N' is the input feature size
  * 'M' is the output feature size
  */
-void Linear_CUDA_slow(Tensor *in, Tensor *w, Tensor *b, Tensor *out, bool relu, cudaStream_t &stream) {
+void Linear_CUDA_slow_moe(Tensor *in, Tensor *w, Tensor *b, Tensor *out, bool relu, cudaStream_t &stream) {
     size_t BS = in->shape[0];
     size_t N = in->shape[1];
     size_t M = w->shape[0];
 
-    dim3 blockDim(BLOCK_SIZE * BLOCK_SIZE);
-    dim3 gridDim((BS + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    dim3 blockDim(MOE_BLOCK_SIZE_X * MOE_BLOCK_SIZE_Y);
+    dim3 gridDim((BS + MOE_BLOCK_SIZE_X - 1) / MOE_BLOCK_SIZE_X, (M + MOE_BLOCK_SIZE_Y - 1) / MOE_BLOCK_SIZE_Y);
     if (relu) {
-        matmul_relu<<<gridDim, blockDim, 0, stream>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M);
+        matmul_relu<<<gridDim, blockDim, 0, stream>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M, MOE_BLOCK_SIZE_X, MOE_BLOCK_SIZE_Y);
     } else {
-        matmul<<<gridDim, blockDim, 0, stream>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M);
+        matmul<<<gridDim, blockDim, 0, stream>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M, MOE_BLOCK_SIZE_X, MOE_BLOCK_SIZE_Y);
+    }
+    // CHECK_CUDA(cudaDeviceSynchronize());
+}
+void Linear_CUDA_slow_fc(Tensor *in, Tensor *w, Tensor *b, Tensor *out, bool relu, cudaStream_t &stream) {
+    size_t BS = in->shape[0];
+    size_t N = in->shape[1];
+    size_t M = w->shape[0];
+
+    dim3 blockDim(FC_BLOCK_SIZE_X * FC_BLOCK_SIZE_Y);
+    dim3 gridDim((BS + FC_BLOCK_SIZE_X - 1) / FC_BLOCK_SIZE_X, (M + FC_BLOCK_SIZE_Y - 1) / FC_BLOCK_SIZE_Y);
+    if (relu) {
+        matmul_relu<<<gridDim, blockDim, 0, stream>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M, FC_BLOCK_SIZE_X, FC_BLOCK_SIZE_Y);
+    } else {
+        matmul<<<gridDim, blockDim, 0, stream>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M, FC_BLOCK_SIZE_X, FC_BLOCK_SIZE_Y);
     }
     // CHECK_CUDA(cudaDeviceSynchronize());
 }
