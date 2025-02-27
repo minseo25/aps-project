@@ -23,50 +23,51 @@
  * 'os' is the output sequence length
  * 'K' is the kernel (or filter) size
  */
-__global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) Conv1DKernel(float *in, float *w, float *b, float *out,
-                            size_t BSOS, size_t CK, size_t OC) {
-  // out idx
-  int row = blockIdx.x * BLOCK_SIZE + threadIdx.x / BLOCK_SIZE;
-  int col = blockIdx.y * BLOCK_SIZE + threadIdx.x % BLOCK_SIZE;
-  // block idx
-  int cRow = blockIdx.x;
-  int cCol = blockIdx.y;
-  // thread idx in block
-  int threadRow = threadIdx.x / BLOCK_SIZE;
-  int threadCol = threadIdx.x % BLOCK_SIZE;
+__global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) gemm_1(float *A, float *B, float *b, float *out,
+                            size_t M, size_t K, size_t N) {
+    // A: [M, K] , B: [N, K] , b: [M] , out: [M, N]
+    // out idx
+    int row = blockIdx.x * BLOCK_SIZE + threadIdx.x / BLOCK_SIZE;
+    int col = blockIdx.y * BLOCK_SIZE + threadIdx.x % BLOCK_SIZE;
+    // block idx
+    int cRow = blockIdx.x;
+    int cCol = blockIdx.y;
+    // thread idx in block
+    int threadRow = threadIdx.x / BLOCK_SIZE;
+    int threadCol = threadIdx.x % BLOCK_SIZE;
 
-  in += cRow * BLOCK_SIZE * CK;
-  w += cCol * BLOCK_SIZE * CK;
-  out += cRow * BLOCK_SIZE * OC + cCol * BLOCK_SIZE;
+    A += cRow * BLOCK_SIZE * K;
+    B += cCol * BLOCK_SIZE * K;
+    out += cRow * BLOCK_SIZE * N + cCol * BLOCK_SIZE;
 
-  float val = 0.f;
-  
-  __shared__ float in_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
-  __shared__ float w_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
+    float val = 0.f;
 
-  for (size_t blk_i = 0; blk_i < CK; blk_i += BLOCK_SIZE) {
-    in_shared[threadRow][threadCol] = 
-        (cRow * BLOCK_SIZE + threadRow >= BSOS || blk_i + threadCol >= CK) ? 
-        0.0f : in[threadRow * CK + threadCol];
-    w_shared[threadRow][threadCol] = 
-        (cCol * BLOCK_SIZE + threadRow >= OC || blk_i + threadCol >= CK) ? 
-        0.0f : w[threadRow * CK + threadCol];
-    __syncthreads();
+    __shared__ float A_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
+    __shared__ float B_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
 
-    in += BLOCK_SIZE;
-    w += BLOCK_SIZE;
+    for (size_t blk_i = 0; blk_i < K; blk_i += BLOCK_SIZE) {
+        A_shared[threadRow][threadCol] = 
+            (cRow * BLOCK_SIZE + threadRow >= M || blk_i + threadCol >= K) ? 
+            0.0f : A[threadRow * K + threadCol];
+        B_shared[threadRow][threadCol] = 
+            (cCol * BLOCK_SIZE + threadRow >= N || blk_i + threadCol >= K) ? 
+            0.0f : B[threadRow * K + threadCol];
+        __syncthreads();
 
-    for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
-      val += in_shared[threadRow][dot_i] * 
-             w_shared[threadCol][dot_i];
+        A += BLOCK_SIZE;
+        B += BLOCK_SIZE;
+
+        for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
+          val += A_shared[threadRow][dot_i] * B_shared[threadCol][dot_i];
+        }
+        __syncthreads();
     }
-    __syncthreads();
+
+    if (row < M && col < N) {
+        out[threadRow * N + threadCol] = val + b[col];
+    }
   }
 
-  if (row < BSOS && col < OC) {
-    out[threadRow * OC + threadCol] = val + b[col];
-  }
-}
 void Conv1D_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
   size_t BS = in->shape[0];
   size_t os = in->shape[1];
@@ -75,7 +76,7 @@ void Conv1D_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
 
   dim3 blockDim(BLOCK_SIZE * BLOCK_SIZE);
   dim3 gridDim((BS * os + BLOCK_SIZE - 1) / BLOCK_SIZE, (OC + BLOCK_SIZE - 1) / BLOCK_SIZE);
-  Conv1DKernel<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS * os, CK, OC);
+  gemm_1<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS * os, CK, OC);
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
@@ -214,50 +215,6 @@ void Concat_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
  * 'N' is the input feature size
  * 'M' is the output feature size
  */
-__global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) LinearKernel(float *in, float *w, float *b, float *out,
-                            size_t BS, size_t N, size_t M) {
-    // C idx
-    int row = blockIdx.x * BLOCK_SIZE + threadIdx.x / BLOCK_SIZE;
-    int col = blockIdx.y * BLOCK_SIZE + threadIdx.x % BLOCK_SIZE;
-    // block idx
-    int cRow = blockIdx.x;
-    int cCol = blockIdx.y;
-    // thread idx in block
-    int threadRow = threadIdx.x / BLOCK_SIZE;
-    int threadCol = threadIdx.x % BLOCK_SIZE;
-
-    in += cRow * BLOCK_SIZE * N;
-    w += cCol * BLOCK_SIZE * N;
-    out += cRow * BLOCK_SIZE * M + cCol * BLOCK_SIZE;
-
-    float val = 0.f;
-
-    __shared__ float in_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
-    __shared__ float w_shared[BLOCK_SIZE][BLOCK_SIZE + 1];
-
-    for (size_t blk_i = 0; blk_i < N; blk_i += BLOCK_SIZE) {
-        in_shared[threadRow][threadCol] = 
-            (cRow * BLOCK_SIZE + threadRow >= BS || blk_i + threadCol >= N) ? 
-            0.0f : in[threadRow * N + threadCol];
-        w_shared[threadRow][threadCol] = 
-            (cCol * BLOCK_SIZE + threadRow >= M || blk_i + threadCol >= N) ? 
-            0.0f : w[threadRow * N + threadCol];
-        __syncthreads();
-
-        in += BLOCK_SIZE;
-        w += BLOCK_SIZE;
-
-        for (size_t dot_i = 0; dot_i < BLOCK_SIZE; dot_i++) {
-            val += in_shared[threadRow][dot_i] * 
-                   w_shared[threadCol][dot_i];
-        }
-        __syncthreads();
-    }
-    
-    if (row < BS && col < M) {
-        out[threadRow * M + threadCol] = val + b[col];
-    }
-}
 void Linear_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
     size_t BS = in->shape[0];
     size_t N = in->shape[1];
@@ -265,7 +222,7 @@ void Linear_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out) {
 
     dim3 blockDim(BLOCK_SIZE * BLOCK_SIZE);
     dim3 gridDim((BS + BLOCK_SIZE - 1) / BLOCK_SIZE, (M + BLOCK_SIZE - 1) / BLOCK_SIZE);
-    LinearKernel<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M);
+    gemm_1<<<gridDim, blockDim>>>(in->d_buf, w->d_buf, b->d_buf, out->d_buf, BS, N, M);
     CHECK_CUDA(cudaDeviceSynchronize());
 }
 
