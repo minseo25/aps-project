@@ -3,20 +3,6 @@
 #define THREADS_PER_BLOCK 256
 #define BLOCK_SIZE 16
 
-__global__ void __launch_bounds__(1)
-Transpose_Kernel(float *in, float *out, int M, int N) {
-  for (int i = 0; i < M; i++)
-    for (int j = 0; j < N; j++)
-      out[j * M + i] = in[i * N + j];
-}
-void Transpose_CUDA(Tensor *in, Tensor *out) {
-  size_t M = in->shape[0];
-  size_t N = in->shape[1];
-  //assert(M == out->shape[1] && N == out->shape[0]);
-  Transpose_Kernel<<<1, 1>>>(in->d_buf, out->d_buf, M, N);
-  CHECK_CUDA(cudaDeviceSynchronize());
-}
-
 __global__ void __launch_bounds__(BLOCK_SIZE * BLOCK_SIZE) matmul(float *A, float *B, float *b, float *out,
                             size_t M, size_t K, size_t N) {
     // A: [M, K] , B: [N, K] , b: [M] , out: [M, N]
@@ -751,17 +737,15 @@ void ReLU_GetMax_CUDA(Tensor *in, Tensor *out) {
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
-/* Concat CUDA kernel */
 __global__ void ConcatKernel(float *in1, float *in2, float *in3, float *in4, float *out,
                             size_t BS, size_t N1, size_t N2, size_t N3, size_t N4) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   size_t total_N = N1 + N2 + N3 + N4;
-
   for (size_t i = idx; i < BS * total_N; i += blockDim.x * gridDim.x) {
     size_t bs = i / total_N;
     size_t offset = i % total_N;
-    
-    size_t id = offset * BS + bs;
+
+    size_t id = bs * total_N + offset;
     if (offset < N1) {
         out[id] = in1[bs * N1 + offset];
     } else if (offset < N1 + N2) {
@@ -774,19 +758,16 @@ __global__ void ConcatKernel(float *in1, float *in2, float *in3, float *in4, flo
   }
 }
 /* Concat using CUDA */
-void Concat_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, 
+void Concat_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
                   Tensor *out) {
   size_t BS = in1->shape[0];
   size_t N1 = in1->shape[1];
   size_t N2 = in2->shape[1];
   size_t N3 = in3->shape[1];
   size_t N4 = in4->shape[1];
-
   dim3 blockDim(THREADS_PER_BLOCK);
   dim3 gridDim((BS * (N1 + N2 + N3 + N4) + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
-  Tensor *tmp = new Tensor({N1 + N2 + N3 + N4, BS});
-  ConcatKernel<<<gridDim, blockDim>>>(in1->d_buf, in2->d_buf, in3->d_buf, in4->d_buf, tmp->d_buf, BS, N1, N2, N3, N4);
-  Transpose_CUDA(tmp, out);
+  ConcatKernel<<<gridDim, blockDim>>>(in1->d_buf, in2->d_buf, in3->d_buf, in4->d_buf, out->d_buf, BS, N1, N2, N3, N4);
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
