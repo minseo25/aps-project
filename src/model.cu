@@ -3,7 +3,7 @@
 #include "layer.h"
 #include "model.h"
 
-#define BATCH_SIZE 128
+#define BATCH_SIZE 256
 
 /* [Model Parameters]
  * _w: Weight parameter
