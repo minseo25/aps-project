@@ -119,8 +119,10 @@ __global__ void GetMax_Kernel(float *in, float *out, size_t BS, size_t s, size_t
   size_t c = idx % C;
 
   float max_val = in[bs * C * s + c];
+  max_val = MAX(max_val, 0);
   for (size_t j = 1; j < s; j++) {
     float val = in[bs * C * s + j * C + c];
+    val = MAX(val, 0);
     max_val = val > max_val ? val : max_val;
   }
   out[bs * C + c] = max_val;
@@ -136,16 +138,55 @@ void GetMax_CUDA(Tensor *in, Tensor *out) {
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
+/* ReLU_GetMax
+ * @param [in]   in: [BS, s, C]
+ * @param [out] out: [BS, C]
+ *    
+ *    This layer is to get the max value along the sequence dim.
+ *    The formula for this layer: out = max(in, dim=-1)
+ * 
+ * 'BS' is the batch size
+ * 's' is the sequence length
+ * 'C' is the channel size
+ */
+__global__ void ReLU_GetMax_Kernel(float *in, float *out, size_t BS, size_t s, size_t C) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= BS * C) return;
+  
+  size_t bs = idx / C;
+  size_t c = idx % C;
+
+  float max_val = in[bs * C * s + c];
+  max_val = MAX(max_val, 0);
+  for (size_t j = 1; j < s; j++) {
+    float val = in[bs * C * s + j * C + c];
+    val = MAX(val, 0);
+    max_val = val > max_val ? val : max_val;
+  }
+  out[bs * C + c] = max_val;
+}
+void ReLU_GetMax_CUDA(Tensor *in, Tensor *out) {
+  size_t BS = in->shape[0];
+  size_t s = in->shape[1];
+  size_t C = in->shape[2];
+
+  dim3 blockDim(THREADS_PER_BLOCK);
+  dim3 gridDim((BS * C + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
+  GetMax_Kernel<<<gridDim, blockDim>>>(in->d_buf, out->d_buf, BS, s, C);
+  CHECK_CUDA(cudaDeviceSynchronize());
+}
+
 /* Concat
  * @param [in1] in1: [BS, N1]
  * @param [in2] in2: [BS, N2]
  * @param [in3] in3: [BS, N3]
  * @param [in4] in4: [BS, N4]
- * @param [out] out: [BS, N1 + N2 + N3 + N4]
+ * @param [out] out: [N1 + N2 + N3 + N4, BS]
  * 'N1', 'N2', 'N3', and 'N4' are the num of elems in the tensors.
  */
 void Concat(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, 
             Tensor *out) {
+  // deprecated
   size_t BS = in1->shape[0];
   size_t N1 = in1->shape[1];
   size_t N2 = in2->shape[1];
@@ -175,19 +216,20 @@ __global__ void ConcatKernel(float *in1, float *in2, float *in3, float *in4, flo
                             size_t BS, size_t N1, size_t N2, size_t N3, size_t N4) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   size_t total_N = N1 + N2 + N3 + N4;
-  
+
   for (size_t i = idx; i < BS * total_N; i += blockDim.x * gridDim.x) {
     size_t bs = i / total_N;
     size_t offset = i % total_N;
     
+    size_t id = offset * BS + bs;
     if (offset < N1) {
-        out[i] = in1[bs * N1 + offset];
+        out[id] = in1[bs * N1 + offset];
     } else if (offset < N1 + N2) {
-        out[i] = in2[bs * N2 + (offset - N1)];
+        out[id] = in2[bs * N2 + (offset - N1)];
     } else if (offset < N1 + N2 + N3) {
-        out[i] = in3[bs * N3 + (offset - N1 - N2)];
+        out[id] = in3[bs * N3 + (offset - N1 - N2)];
     } else {
-        out[i] = in4[bs * N4 + (offset - N1 - N2 - N3)];
+        out[id] = in4[bs * N4 + (offset - N1 - N2 - N3)];
     }
   }
 }
@@ -341,6 +383,7 @@ void Softmax_CUDA(Tensor *inout) {
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
+/* deprecated */
 /* (Elemwise) Scaling
  * @param [in & out] inout: [BS, N]
  * @param [in]           gate: [BS, 4]
@@ -377,6 +420,7 @@ void Scaling_CUDA(Tensor *inout, Tensor *gate, size_t gate_col) {
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 
+/* deprecated */
 /* (Elemwise) Addition
  * @param [in1] in1: [BS, N]
  * @param [in2] in2: [BS, N]
@@ -412,6 +456,44 @@ void Add_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
   dim3 blockDim(THREADS_PER_BLOCK);
   dim3 gridDim((BS * N + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
   AddKernel<<<gridDim, blockDim>>>(in1->d_buf, in2->d_buf, in3->d_buf, in4->d_buf, out->d_buf, BS, N);
+  CHECK_CUDA(cudaDeviceSynchronize());
+}
+
+/* Scaling and (Elemwise) Addition
+ * @param [in1] in1: [BS, N]
+ * @param [in2] in2: [BS, N]
+ * @param [in3] in3: [BS, N]
+ * @param [in4] in4: [BS, N]
+ * @param [out] out: [N, BS]
+ * 'N' is the number of elements in the input tensor.
+ */
+__global__ void Scaling_Add_Kernel(float *in1, float *in2, float *in3, float *in4, float *gate,
+                                   float *out, size_t BS, size_t N) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= BS * N) return;
+
+  size_t bs = idx / N;
+  size_t n = idx % N;
+
+  float sum = 0;
+
+  sum += in1[bs * N + n] * gate[bs * 4];
+  sum += in2[bs * N + n] * gate[bs * 4 + 1];
+  sum += in3[bs * N + n] * gate[bs * 4 + 2];
+  sum += in4[bs * N + n] * gate[bs * 4 + 3];
+  
+  // out[bs * N + n] = sum;
+  out[n * BS + bs] = sum;
+}
+void Scaling_Add_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, Tensor *gate,
+                      Tensor *out) {
+  size_t BS = in1->shape[0];
+  size_t N = in1->shape[1];
+
+  dim3 blockDim(THREADS_PER_BLOCK);
+  dim3 gridDim((BS * N + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
+  Scaling_Add_Kernel<<<gridDim, blockDim>>>(in1->d_buf, in2->d_buf, in3->d_buf, in4->d_buf,
+                                            gate->d_buf, out->d_buf, BS, N);
   CHECK_CUDA(cudaDeviceSynchronize());
 }
 

@@ -217,15 +217,10 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
   Linear_CUDA(in, exp2_w, exp2_b, expert2_a);
   Linear_CUDA(in, exp3_w, exp3_b, expert3_a);
 
-  /* 4. Scale the expert's output: in [BS, 2048] -> out [BS, 2048] */
-  Scaling_CUDA(expert0_a, gate_a, 0);
-  Scaling_CUDA(expert1_a, gate_a, 1);
-  Scaling_CUDA(expert2_a, gate_a, 2);
-  Scaling_CUDA(expert3_a, gate_a, 3);
-
-  /* 5. Accumulate the expert's output:
-    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [BS, 2048] */
-  Add_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, out);
+  /* 4. Scale and Accumulate the expert's output:
+   * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [2048, BS]
+   */
+  Scaling_Add_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, gate_a, out);
 }
 
 /* [Model Computation: Sentiment Analysis Task] */
@@ -241,42 +236,38 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     im2col_1d_CUDA(input, unrolled_input0, 3);
     /* in [BS, SEQ_LEN - 2, 4096 * 3] -> out [BS, SEQ_LEN - 2, 1024] */
     Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a);
-    ReLU_CUDA(conv0_a); 
 
     /* in [BS, SEQ_LEN - 2, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv0_a, pool0_a);
+    ReLU_GetMax_CUDA(conv0_a, pool0_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 4, 4096 * 5] */
     im2col_1d_CUDA(input, unrolled_input1, 5);
     /* in [BS, SEQ_LEN - 4, 4096 * 5] -> out [BS, SEQ_LEN - 4, 1024] */
     Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a);
-    ReLU_CUDA(conv1_a);
 
     /* in [BS, SEQ_LEN - 4, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv1_a, pool1_a);
+    ReLU_GetMax_CUDA(conv1_a, pool1_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 6, 4096 * 7] */
     im2col_1d_CUDA(input, unrolled_input2, 7);
     /* in [BS, SEQ_LEN - 6, 4096 * 7] -> out [BS, SEQ_LEN - 6, 1024] */
     Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a);
-    ReLU_CUDA(conv2_a);
 
     /* in [BS, SEQ_LEN - 6, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv2_a, pool2_a);
+    ReLU_GetMax_CUDA(conv2_a, pool2_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 8, 4096 * 9] */
     im2col_1d_CUDA(input, unrolled_input3, 9);
     /* in [BS, SEQ_LEN - 8, 4096 * 9] -> out [BS, SEQ_LEN - 8, 1024] */
     Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a);
-    ReLU_CUDA(conv3_a);
 
     /* in [BS, SEQ_LEN - 8, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv3_a, pool3_a);
+    ReLU_GetMax_CUDA(conv3_a, pool3_a);
 
     /* in [BS, 1024] +
           [BS, 1024] +
           [BS, 1024] +
-          [BS, 1024] -> out [BS, 1024 * 4] */
+          [BS, 1024] -> out [1024 * 4, BS] */
     Concat_CUDA(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
     /* in [BS, 1024 * 4] -> out [BS, 2048] */
