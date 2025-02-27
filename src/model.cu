@@ -203,6 +203,9 @@ void free_activations() {
   delete linear2_a;
 }
 
+cudaStream_t stream1, stream2, stream3, stream4;
+cudaStream_t stream5, stream6, stream7, stream8, stream9;
+
 /* Dense Mixture-of-Experts (MoE) Layer
  * - The MoE layer has a total 4 Experts (Linear) with a Gating mechanism.
  * @param [in1]      in: [BS, 4096]
@@ -224,16 +227,18 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
          Parameter *gate_w, Parameter *gate_b, Activation *out) {
 
   /* 1. Compute the gate logits: in [BS, 4096] -> out [BS, 4] */
-  Linear_CUDA_slow(in, gate_w, gate_b, gate_a, false);
+  Linear_CUDA_slow(in, gate_w, gate_b, gate_a, false, stream9);
 
   /* 2. Compute the softmax of the gate logits: in [BS, 4] -> out [BS, 4] */
-  Softmax_CUDA(gate_a);
+  Softmax_CUDA(gate_a, stream9);
 
   /* 3. Compute the expert's output: in [BS, 4096] -> out [BS, 2048] */
-  Linear_CUDA_slow(in, exp0_w, exp0_b, expert0_a, false);
-  Linear_CUDA_slow(in, exp1_w, exp1_b, expert1_a, false);
-  Linear_CUDA_slow(in, exp2_w, exp2_b, expert2_a, false);
-  Linear_CUDA_slow(in, exp3_w, exp3_b, expert3_a, false);
+  Linear_CUDA_slow(in, exp0_w, exp0_b, expert0_a, false, stream5);
+  Linear_CUDA_slow(in, exp1_w, exp1_b, expert1_a, false, stream6);
+  Linear_CUDA_slow(in, exp2_w, exp2_b, expert2_a, false, stream7);
+  Linear_CUDA_slow(in, exp3_w, exp3_b, expert3_a, false, stream8);
+
+  CHECK_CUDA(cudaDeviceSynchronize());
 
   /* 4. Scale and Accumulate the expert's output:
    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [2048, BS]
@@ -244,6 +249,23 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
 /* [Model Computation: Sentiment Analysis Task] */
 void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
   int n_batches = (n_samples + BATCH_SIZE - 1) / BATCH_SIZE;
+
+  
+
+  int leastPriority, highestPriority;
+  cudaDeviceGetStreamPriorityRange(&leastPriority, &highestPriority);
+
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream1, cudaStreamNonBlocking, highestPriority));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream2, cudaStreamNonBlocking, highestPriority + 1));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream3, cudaStreamNonBlocking, highestPriority + 2));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream4, cudaStreamNonBlocking, highestPriority + 3));
+
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream5, cudaStreamNonBlocking, highestPriority));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream6, cudaStreamNonBlocking, highestPriority));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream7, cudaStreamNonBlocking, highestPriority));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream8, cudaStreamNonBlocking, highestPriority));
+  CHECK_CUDA(cudaStreamCreateWithPriority(&stream9, cudaStreamNonBlocking, highestPriority + 2));
+
   for (int n = 0; n < n_batches; n++) {
     /* Load a sentence from the inputs */
     size_t start = n * BATCH_SIZE;
@@ -251,36 +273,38 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     input->to_device_with_shape(inputs + start * SEQ_LEN * 4096, BS, 4096, SEQ_LEN, 1);
 
     /* in [BS, 4096, SEQ_LEN] -> out [4096 * 3, BS, SEQ_LEN - 2] */
-    im2col_1d_CUDA(input, unrolled_input0, 3);
+    im2col_1d_CUDA(input, unrolled_input0, 3, stream1);
     /* in [4096 * 3, BS, SEQ_LEN - 2] -> out [BS, SEQ_LEN - 2, 1024] */
-    Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a);
+    Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a, stream1);
 
     /* in [BS, SEQ_LEN - 2, 1024] -> out [BS, 1024] */
-    ReLU_GetMax_CUDA(conv0_a, pool0_a);
+    ReLU_GetMax_CUDA(conv0_a, pool0_a, stream1);
 
     /* in [BS, 4096, SEQ_LEN] -> out [4096 * 5, BS, SEQ_LEN - 4] */
-    im2col_1d_CUDA(input, unrolled_input1, 5);
+    im2col_1d_CUDA(input, unrolled_input1, 5, stream2);
     /* in [4096 * 5, BS, SEQ_LEN - 4] -> out [BS, SEQ_LEN - 4, 1024] */
-    Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a);
+    Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a, stream2);
 
     /* in [BS, SEQ_LEN - 4, 1024] -> out [BS, 1024] */
-    ReLU_GetMax_CUDA(conv1_a, pool1_a);
+    ReLU_GetMax_CUDA(conv1_a, pool1_a, stream2);
 
     /* in [BS, 4096, SEQ_LEN] -> out [4096 * 7, BS, SEQ_LEN - 6] */
-    im2col_1d_CUDA(input, unrolled_input2, 7);
+    im2col_1d_CUDA(input, unrolled_input2, 7, stream3);
     /* in [4096 * 7, BS, SEQ_LEN - 6] -> out [BS, SEQ_LEN - 6, 1024] */
-    Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a);
+    Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a, stream3);
 
     /* in [BS, SEQ_LEN - 6, 1024] -> out [BS, 1024] */
-    ReLU_GetMax_CUDA(conv2_a, pool2_a);
+    ReLU_GetMax_CUDA(conv2_a, pool2_a, stream3);
 
     /* in [BS, 4096, SEQ_LEN] -> out [4096 * 9, BS, SEQ_LEN - 8] */
-    im2col_1d_CUDA(input, unrolled_input3, 9);
+    im2col_1d_CUDA(input, unrolled_input3, 9, stream4);
     /* in [4096 * 9, BS, SEQ_LEN - 8] -> out [BS, SEQ_LEN - 8, 1024] */
-    Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a);
+    Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a, stream4);
 
     /* in [BS, SEQ_LEN - 8, 1024] -> out [BS, 1024] */
-    ReLU_GetMax_CUDA(conv3_a, pool3_a);
+    ReLU_GetMax_CUDA(conv3_a, pool3_a, stream4);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
 
     /* in [BS, 1024] +
           [BS, 1024] +
@@ -297,10 +321,12 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a, true);
 
     /* in [BS, 1024] -> out [BS, 512] */
-    Linear_CUDA_slow(linear0_a, linear1_w, linear1_b, linear1_a, true);
+    Linear_CUDA_slow(linear0_a, linear1_w, linear1_b, linear1_a, true, stream5);
+    CHECK_CUDA(cudaDeviceSynchronize());
 
     /* in [BS, 512] -> out [BS, 2] */
-    Linear_CUDA_slow(linear1_a, linear2_w, linear2_b, linear2_a, false);
+    Linear_CUDA_slow(linear1_a, linear2_w, linear2_b, linear2_a, false, stream5);
+    CHECK_CUDA(cudaDeviceSynchronize());
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 
       for each sentiment class (0: negative, 1: positive). To determine 
