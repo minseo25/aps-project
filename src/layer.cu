@@ -817,22 +817,18 @@ void Linear_CUDA_slow(Tensor *in, Tensor *w, Tensor *b, Tensor *out, bool relu) 
 __global__ void SoftmaxKernel(float *inout, size_t BS, size_t N) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= BS) return;
-
-  size_t offset = idx * N;
-  float max_val = inout[offset];
-  for (size_t i = 1; i < N; i++) {
-    float val = inout[offset + i];
-    max_val = val > max_val ? val : max_val;
-  }
-
-  float sum = 0.f;
-  for (size_t i = 0; i < N; i++) {
-    float exp_val = exp(inout[offset + i] - max_val);
-    inout[offset + i] = exp_val;
-    sum += exp_val;
-  }
-
-  for (size_t i = 0; i < N; i++) { inout[offset + i] /= sum; }
+  float4 vec = *(float4*)(&inout[idx * N]);
+  float max_val = MAX(MAX(vec.x, vec.y), MAX(vec.z, vec.w));
+  vec.x = exp(vec.x - max_val);
+  vec.y = exp(vec.y - max_val);
+  vec.z = exp(vec.z - max_val);
+  vec.w = exp(vec.w - max_val);
+  float sum = vec.x + vec.y + vec.z + vec.w;
+  vec.x /= sum;
+  vec.y /= sum;
+  vec.z /= sum;
+  vec.w /= sum;
+  *(float4*)(&inout[idx * N]) = vec;
 }
 /* Softmax using CUDA */
 void Softmax_CUDA(Tensor *inout) {
