@@ -25,28 +25,43 @@ Parameter *linear0_w, *linear0_b;
 Parameter *linear1_w, *linear1_b;
 Parameter *linear2_w, *linear2_b;
 
+void cpu_transpose_parameter(float *target, float *source, size_t M, size_t N) {
+  // source: [M, N] -> target: [N, M]
+  for (size_t i = 0; i < M; i++) {
+    for (size_t j = 0; j < N; j++) {
+      target[j * M + i] = source[i * N + j];
+    }
+  }
+}
+
 void alloc_and_set_parameters(float *param, size_t param_size) {
   size_t pos = 0;
 
-  conv0_w = new Parameter({1024, 4096 * 3}, param + pos);
-  pos += 1024 * 4096 * 3; 
+  float *tmp_w = (float *)malloc(1024 * 4096 * 9 * sizeof(float));
+  cpu_transpose_parameter(tmp_w, param + pos, 1024, 4096 * 3);
+  conv0_w = new Parameter({4096 * 3, 1024}, tmp_w);
+  pos += 4096 * 3 * 1024; 
   conv0_b = new Parameter({1024}, param + pos);
   pos += 1024;
 
-  conv1_w = new Parameter({1024, 4096 * 5}, param + pos);
-  pos += 1024 * 4096 * 5; 
+  cpu_transpose_parameter(tmp_w, param + pos, 1024, 4096 * 5);
+  conv1_w = new Parameter({4096 * 5, 1024}, tmp_w);
+  pos += 4096 * 5 * 1024; 
   conv1_b = new Parameter({1024}, param + pos);
   pos += 1024;
 
-  conv2_w = new Parameter({1024, 4096 * 7}, param + pos);
-  pos += 1024 * 4096 * 7;
+  cpu_transpose_parameter(tmp_w, param + pos, 1024, 4096 * 7);
+  conv2_w = new Parameter({4096 * 7, 1024}, tmp_w);
+  pos += 4096 * 7 * 1024;
   conv2_b = new Parameter({1024}, param + pos);
   pos += 1024;
 
-  conv3_w = new Parameter({1024, 4096 * 9}, param + pos);
-  pos += 1024 * 4096 * 9;
+  cpu_transpose_parameter(tmp_w, param + pos, 1024, 4096 * 9);
+  conv3_w = new Parameter({4096 * 9, 1024}, tmp_w);
+  pos += 4096 * 9 * 1024;
   conv3_b = new Parameter({1024}, param + pos);
   pos += 1024;
+  free(tmp_w);
   
   moe_exp0_w = new Parameter({2048, 4096}, param + pos);
   pos += 2048 * 4096;
@@ -73,10 +88,13 @@ void alloc_and_set_parameters(float *param, size_t param_size) {
   moe_gate_b = new Parameter({4}, param + pos);
   pos += 4;
 
-  linear0_w = new Parameter({1024, 2048}, param + pos);
-  pos += 1024 * 2048;
+  tmp_w = (float *)malloc(1024 * 2048 * sizeof(float));
+  cpu_transpose_parameter(tmp_w, param + pos, 1024, 2048);
+  linear0_w = new Parameter({2048, 1024}, tmp_w);
+  pos += 2048 * 1024;
   linear0_b = new Parameter({1024}, param + pos);
   pos += 1024;
+  free(tmp_w);
 
   linear1_w = new Parameter({512, 1024}, param + pos);
   pos += 512 * 1024;
@@ -141,10 +159,10 @@ Activation *linear0_a, *linear1_a, *linear2_a;
 
 void alloc_activations() {
   input = new Tensor({BATCH_SIZE, 4096, SEQ_LEN});
-  unrolled_input0 = new Activation({BATCH_SIZE, SEQ_LEN - 2, 4096 * 3});
-  unrolled_input1 = new Activation({BATCH_SIZE, SEQ_LEN - 4, 4096 * 5});
-  unrolled_input2 = new Activation({BATCH_SIZE, SEQ_LEN - 6, 4096 * 7});
-  unrolled_input3 = new Activation({BATCH_SIZE, SEQ_LEN - 8, 4096 * 9});
+  unrolled_input0 = new Activation({4096 * 3, BATCH_SIZE, SEQ_LEN - 2});
+  unrolled_input1 = new Activation({4096 * 5, BATCH_SIZE, SEQ_LEN - 4});
+  unrolled_input2 = new Activation({4096 * 7, BATCH_SIZE, SEQ_LEN - 6});
+  unrolled_input3 = new Activation({4096 * 9, BATCH_SIZE, SEQ_LEN - 8});
   conv0_a = new Activation({BATCH_SIZE, SEQ_LEN - 2, 1024});
   pool0_a = new Activation({BATCH_SIZE, 1024});
   conv1_a = new Activation({BATCH_SIZE, SEQ_LEN - 4, 1024});
@@ -159,7 +177,7 @@ void alloc_activations() {
   expert1_a = new Activation({BATCH_SIZE, 2048});
   expert2_a = new Activation({BATCH_SIZE, 2048});
   expert3_a = new Activation({BATCH_SIZE, 2048});
-  moe_a = new Activation({BATCH_SIZE, 2048});
+  moe_a = new Activation({2048, BATCH_SIZE});
   linear0_a = new Activation({BATCH_SIZE, 1024});
   linear1_a = new Activation({BATCH_SIZE, 512});
   linear2_a = new Activation({BATCH_SIZE, 2});
@@ -206,16 +224,16 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
          Parameter *gate_w, Parameter *gate_b, Activation *out) {
 
   /* 1. Compute the gate logits: in [BS, 4096] -> out [BS, 4] */
-  Linear_CUDA(in, gate_w, gate_b, gate_a);
+  Linear_CUDA_slow(in, gate_w, gate_b, gate_a, false);
 
   /* 2. Compute the softmax of the gate logits: in [BS, 4] -> out [BS, 4] */
   Softmax_CUDA(gate_a);
 
   /* 3. Compute the expert's output: in [BS, 4096] -> out [BS, 2048] */
-  Linear_CUDA(in, exp0_w, exp0_b, expert0_a);
-  Linear_CUDA(in, exp1_w, exp1_b, expert1_a);
-  Linear_CUDA(in, exp2_w, exp2_b, expert2_a);
-  Linear_CUDA(in, exp3_w, exp3_b, expert3_a);
+  Linear_CUDA_slow(in, exp0_w, exp0_b, expert0_a, false);
+  Linear_CUDA_slow(in, exp1_w, exp1_b, expert1_a, false);
+  Linear_CUDA_slow(in, exp2_w, exp2_b, expert2_a, false);
+  Linear_CUDA_slow(in, exp3_w, exp3_b, expert3_a, false);
 
   /* 4. Scale and Accumulate the expert's output:
    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [2048, BS]
@@ -232,33 +250,33 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     size_t BS = (n == n_batches - 1) ? n_samples - start : BATCH_SIZE; // batch size
     input->to_device_with_shape(inputs + start * SEQ_LEN * 4096, BS, 4096, SEQ_LEN, 1);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 2, 4096 * 3] */
+    /* in [BS, 4096, SEQ_LEN] -> out [4096 * 3, BS, SEQ_LEN - 2] */
     im2col_1d_CUDA(input, unrolled_input0, 3);
-    /* in [BS, SEQ_LEN - 2, 4096 * 3] -> out [BS, SEQ_LEN - 2, 1024] */
+    /* in [4096 * 3, BS, SEQ_LEN - 2] -> out [BS, SEQ_LEN - 2, 1024] */
     Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a);
 
     /* in [BS, SEQ_LEN - 2, 1024] -> out [BS, 1024] */
     ReLU_GetMax_CUDA(conv0_a, pool0_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 4, 4096 * 5] */
+    /* in [BS, 4096, SEQ_LEN] -> out [4096 * 5, BS, SEQ_LEN - 4] */
     im2col_1d_CUDA(input, unrolled_input1, 5);
-    /* in [BS, SEQ_LEN - 4, 4096 * 5] -> out [BS, SEQ_LEN - 4, 1024] */
+    /* in [4096 * 5, BS, SEQ_LEN - 4] -> out [BS, SEQ_LEN - 4, 1024] */
     Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a);
 
     /* in [BS, SEQ_LEN - 4, 1024] -> out [BS, 1024] */
     ReLU_GetMax_CUDA(conv1_a, pool1_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 6, 4096 * 7] */
+    /* in [BS, 4096, SEQ_LEN] -> out [4096 * 7, BS, SEQ_LEN - 6] */
     im2col_1d_CUDA(input, unrolled_input2, 7);
-    /* in [BS, SEQ_LEN - 6, 4096 * 7] -> out [BS, SEQ_LEN - 6, 1024] */
+    /* in [4096 * 7, BS, SEQ_LEN - 6] -> out [BS, SEQ_LEN - 6, 1024] */
     Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a);
 
     /* in [BS, SEQ_LEN - 6, 1024] -> out [BS, 1024] */
     ReLU_GetMax_CUDA(conv2_a, pool2_a);
 
-    /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 8, 4096 * 9] */
+    /* in [BS, 4096, SEQ_LEN] -> out [4096 * 9, BS, SEQ_LEN - 8] */
     im2col_1d_CUDA(input, unrolled_input3, 9);
-    /* in [BS, SEQ_LEN - 8, 4096 * 9] -> out [BS, SEQ_LEN - 8, 1024] */
+    /* in [4096 * 9, BS, SEQ_LEN - 8] -> out [BS, SEQ_LEN - 8, 1024] */
     Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a);
 
     /* in [BS, SEQ_LEN - 8, 1024] -> out [BS, 1024] */
@@ -270,21 +288,19 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
           [BS, 1024] -> out [1024 * 4, BS] */
     Concat_CUDA(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
-    /* in [BS, 1024 * 4] -> out [BS, 2048] */
+    /* in [BS, 1024 * 4] -> out [2048, BS] */
     MoE(concat_a, moe_exp0_w, moe_exp0_b, moe_exp1_w, moe_exp1_b,
       moe_exp2_w, moe_exp2_b, moe_exp3_w, moe_exp3_b, moe_gate_w,
       moe_gate_b, moe_a);
 
-    /* in [BS, 2048] -> out [BS, 1024] */
-    Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a);
-    ReLU_CUDA(linear0_a);
+    /* in [2048, BS] -> out [BS, 1024] */
+    Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a, true);
 
     /* in [BS, 1024] -> out [BS, 512] */
-    Linear_CUDA(linear0_a, linear1_w, linear1_b, linear1_a);
-    ReLU_CUDA(linear1_a);
+    Linear_CUDA_slow(linear0_a, linear1_w, linear1_b, linear1_a, true);
 
     /* in [BS, 512] -> out [BS, 2] */
-    Linear_CUDA(linear1_a, linear2_w, linear2_b, linear2_a);
+    Linear_CUDA_slow(linear1_a, linear2_w, linear2_b, linear2_a, false);
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 
       for each sentiment class (0: negative, 1: positive). To determine 
