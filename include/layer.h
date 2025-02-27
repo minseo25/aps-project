@@ -24,6 +24,8 @@ void Softmax_CUDA(Tensor *inout);
 void Scaling_CUDA(Tensor *inout, Tensor *gate, size_t gate_col);
 void Add_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, 
          Tensor *out);
+void Scaling_Add_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, Tensor *gate,
+                      Tensor *out);
 void im2col_1d_CUDA(Tensor *in, Tensor *out, size_t K);
 
 /* [Advanced] Example of using half-precision on CPU */

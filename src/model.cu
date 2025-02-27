@@ -217,15 +217,10 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
   Linear_CUDA(in, exp2_w, exp2_b, expert2_a);
   Linear_CUDA(in, exp3_w, exp3_b, expert3_a);
 
-  /* 4. Scale the expert's output: in [BS, 2048] -> out [BS, 2048] */
-  Scaling_CUDA(expert0_a, gate_a, 0);
-  Scaling_CUDA(expert1_a, gate_a, 1);
-  Scaling_CUDA(expert2_a, gate_a, 2);
-  Scaling_CUDA(expert3_a, gate_a, 3);
-
-  /* 5. Accumulate the expert's output:
-    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [BS, 2048] */
-  Add_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, out);
+  /* 4. Scale and Accumulate the expert's output:
+   * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [2048, BS]
+   */
+  Scaling_Add_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, gate_a, out);
 }
 
 /* [Model Computation: Sentiment Analysis Task] */
@@ -272,7 +267,7 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     /* in [BS, 1024] +
           [BS, 1024] +
           [BS, 1024] +
-          [BS, 1024] -> out [BS, 1024 * 4] */
+          [BS, 1024] -> out [1024 * 4, BS] */
     Concat_CUDA(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
     /* in [BS, 1024 * 4] -> out [BS, 2048] */
