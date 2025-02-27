@@ -2,6 +2,7 @@
 
 #include "tensor.h"
 
+#define MAX(A, B) A > B ? A : B
 
 /* Layers (Operations) */
 void Concat(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, 
@@ -15,6 +16,7 @@ void Add(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4,
 void Conv1D_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out);
 void ReLU_CUDA(Tensor *inout);
 void GetMax_CUDA(Tensor *in, Tensor *out);
+void ReLU_GetMax_CUDA(Tensor *in, Tensor *out);
 void Concat_CUDA(Tensor *in1, Tensor *in2, Tensor *in3, Tensor *in4, 
                   Tensor *out);
 void Linear_CUDA(Tensor *in, Tensor *w, Tensor *b, Tensor *out);

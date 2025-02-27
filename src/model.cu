@@ -241,37 +241,33 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     im2col_1d_CUDA(input, unrolled_input0, 3);
     /* in [BS, SEQ_LEN - 2, 4096 * 3] -> out [BS, SEQ_LEN - 2, 1024] */
     Conv1D_CUDA(unrolled_input0, conv0_w, conv0_b, conv0_a);
-    ReLU_CUDA(conv0_a); 
 
     /* in [BS, SEQ_LEN - 2, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv0_a, pool0_a);
+    ReLU_GetMax_CUDA(conv0_a, pool0_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 4, 4096 * 5] */
     im2col_1d_CUDA(input, unrolled_input1, 5);
     /* in [BS, SEQ_LEN - 4, 4096 * 5] -> out [BS, SEQ_LEN - 4, 1024] */
     Conv1D_CUDA(unrolled_input1, conv1_w, conv1_b, conv1_a);
-    ReLU_CUDA(conv1_a);
 
     /* in [BS, SEQ_LEN - 4, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv1_a, pool1_a);
+    ReLU_GetMax_CUDA(conv1_a, pool1_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 6, 4096 * 7] */
     im2col_1d_CUDA(input, unrolled_input2, 7);
     /* in [BS, SEQ_LEN - 6, 4096 * 7] -> out [BS, SEQ_LEN - 6, 1024] */
     Conv1D_CUDA(unrolled_input2, conv2_w, conv2_b, conv2_a);
-    ReLU_CUDA(conv2_a);
 
     /* in [BS, SEQ_LEN - 6, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv2_a, pool2_a);
+    ReLU_GetMax_CUDA(conv2_a, pool2_a);
 
     /* in [BS, 4096, SEQ_LEN] -> out [BS, SEQ_LEN - 8, 4096 * 9] */
     im2col_1d_CUDA(input, unrolled_input3, 9);
     /* in [BS, SEQ_LEN - 8, 4096 * 9] -> out [BS, SEQ_LEN - 8, 1024] */
     Conv1D_CUDA(unrolled_input3, conv3_w, conv3_b, conv3_a);
-    ReLU_CUDA(conv3_a);
 
     /* in [BS, SEQ_LEN - 8, 1024] -> out [BS, 1024] */
-    GetMax_CUDA(conv3_a, pool3_a);
+    ReLU_GetMax_CUDA(conv3_a, pool3_a);
 
     /* in [BS, 1024] +
           [BS, 1024] +

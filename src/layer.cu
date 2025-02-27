@@ -119,13 +119,53 @@ __global__ void GetMax_Kernel(float *in, float *out, size_t BS, size_t s, size_t
   size_t c = idx % C;
 
   float max_val = in[bs * C * s + c];
+  max_val = MAX(max_val, 0);
   for (size_t j = 1; j < s; j++) {
     float val = in[bs * C * s + j * C + c];
+    val = MAX(val, 0);
     max_val = val > max_val ? val : max_val;
   }
   out[bs * C + c] = max_val;
 }
 void GetMax_CUDA(Tensor *in, Tensor *out) {
+  size_t BS = in->shape[0];
+  size_t s = in->shape[1];
+  size_t C = in->shape[2];
+
+  dim3 blockDim(THREADS_PER_BLOCK);
+  dim3 gridDim((BS * C + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
+  GetMax_Kernel<<<gridDim, blockDim>>>(in->d_buf, out->d_buf, BS, s, C);
+  CHECK_CUDA(cudaDeviceSynchronize());
+}
+
+/* ReLU_GetMax
+ * @param [in]   in: [BS, s, C]
+ * @param [out] out: [BS, C]
+ *    
+ *    This layer is to get the max value along the sequence dim.
+ *    The formula for this layer: out = max(in, dim=-1)
+ * 
+ * 'BS' is the batch size
+ * 's' is the sequence length
+ * 'C' is the channel size
+ */
+__global__ void ReLU_GetMax_Kernel(float *in, float *out, size_t BS, size_t s, size_t C) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= BS * C) return;
+  
+  size_t bs = idx / C;
+  size_t c = idx % C;
+
+  float max_val = in[bs * C * s + c];
+  max_val = MAX(max_val, 0);
+  for (size_t j = 1; j < s; j++) {
+    float val = in[bs * C * s + j * C + c];
+    val = MAX(val, 0);
+    max_val = val > max_val ? val : max_val;
+  }
+  out[bs * C + c] = max_val;
+}
+void ReLU_GetMax_CUDA(Tensor *in, Tensor *out) {
   size_t BS = in->shape[0];
   size_t s = in->shape[1];
   size_t C = in->shape[2];
