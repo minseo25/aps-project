@@ -88,10 +88,13 @@ void alloc_and_set_parameters(float *param, size_t param_size) {
   moe_gate_b = new Parameter({4}, param + pos);
   pos += 4;
 
-  linear0_w = new Parameter({1024, 2048}, param + pos);
-  pos += 1024 * 2048;
+  tmp_w = (float *)malloc(1024 * 2048 * sizeof(float));
+  cpu_transpose_parameter(tmp_w, param + pos, 1024, 2048);
+  linear0_w = new Parameter({2048, 1024}, tmp_w);
+  pos += 2048 * 1024;
   linear0_b = new Parameter({1024}, param + pos);
   pos += 1024;
+  free(tmp_w);
 
   linear1_w = new Parameter({512, 1024}, param + pos);
   pos += 512 * 1024;
@@ -174,7 +177,7 @@ void alloc_activations() {
   expert1_a = new Activation({BATCH_SIZE, 2048});
   expert2_a = new Activation({BATCH_SIZE, 2048});
   expert3_a = new Activation({BATCH_SIZE, 2048});
-  moe_a = new Activation({BATCH_SIZE, 2048});
+  moe_a = new Activation({2048, BATCH_SIZE});
   linear0_a = new Activation({BATCH_SIZE, 1024});
   linear1_a = new Activation({BATCH_SIZE, 512});
   linear2_a = new Activation({BATCH_SIZE, 2});
@@ -221,16 +224,16 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
          Parameter *gate_w, Parameter *gate_b, Activation *out) {
 
   /* 1. Compute the gate logits: in [BS, 4096] -> out [BS, 4] */
-  Linear_CUDA(in, gate_w, gate_b, gate_a);
+  Linear_CUDA_slow(in, gate_w, gate_b, gate_a, false);
 
   /* 2. Compute the softmax of the gate logits: in [BS, 4] -> out [BS, 4] */
   Softmax_CUDA(gate_a);
 
   /* 3. Compute the expert's output: in [BS, 4096] -> out [BS, 2048] */
-  Linear_CUDA(in, exp0_w, exp0_b, expert0_a);
-  Linear_CUDA(in, exp1_w, exp1_b, expert1_a);
-  Linear_CUDA(in, exp2_w, exp2_b, expert2_a);
-  Linear_CUDA(in, exp3_w, exp3_b, expert3_a);
+  Linear_CUDA_slow(in, exp0_w, exp0_b, expert0_a, false);
+  Linear_CUDA_slow(in, exp1_w, exp1_b, expert1_a, false);
+  Linear_CUDA_slow(in, exp2_w, exp2_b, expert2_a, false);
+  Linear_CUDA_slow(in, exp3_w, exp3_b, expert3_a, false);
 
   /* 4. Scale and Accumulate the expert's output:
    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [2048, BS]
@@ -285,21 +288,19 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
           [BS, 1024] -> out [1024 * 4, BS] */
     Concat_CUDA(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
-    /* in [BS, 1024 * 4] -> out [BS, 2048] */
+    /* in [BS, 1024 * 4] -> out [2048, BS] */
     MoE(concat_a, moe_exp0_w, moe_exp0_b, moe_exp1_w, moe_exp1_b,
       moe_exp2_w, moe_exp2_b, moe_exp3_w, moe_exp3_b, moe_gate_w,
       moe_gate_b, moe_a);
 
-    /* in [BS, 2048] -> out [BS, 1024] */
-    Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a);
-    ReLU_CUDA(linear0_a);
+    /* in [2048, BS] -> out [BS, 1024] */
+    Linear_CUDA(moe_a, linear0_w, linear0_b, linear0_a, true);
 
     /* in [BS, 1024] -> out [BS, 512] */
-    Linear_CUDA(linear0_a, linear1_w, linear1_b, linear1_a);
-    ReLU_CUDA(linear1_a);
+    Linear_CUDA_slow(linear0_a, linear1_w, linear1_b, linear1_a, true);
 
     /* in [BS, 512] -> out [BS, 2] */
-    Linear_CUDA(linear1_a, linear2_w, linear2_b, linear2_a);
+    Linear_CUDA_slow(linear1_a, linear2_w, linear2_b, linear2_a, false);
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 
       for each sentiment class (0: negative, 1: positive). To determine 
