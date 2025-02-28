@@ -243,15 +243,12 @@ void MoE(Activation *in, Parameter *exp0_w, Parameter *exp0_b,
   /* 4. Scale and Accumulate the expert's output:
    * in [BS, 2048] + [BS, 2048] + [BS, 2048] + [BS, 2048] -> out [2048, BS]
    */
-  Scaling_Add_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, gate_a, out);
+  Scaling_Add_Transpose_CUDA(expert0_a, expert1_a, expert2_a, expert3_a, gate_a, out);
 }
 
 /* [Model Computation: Sentiment Analysis Task] */
 void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
   int n_batches = (n_samples + BATCH_SIZE - 1) / BATCH_SIZE;
-
-  
-
   int leastPriority, highestPriority;
   cudaDeviceGetStreamPriorityRange(&leastPriority, &highestPriority);
 
@@ -309,10 +306,10 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
     /* in [BS, 1024] +
           [BS, 1024] +
           [BS, 1024] +
-          [BS, 1024] -> out [1024 * 4, BS] */
+          [BS, 1024] -> out [BS, 4096] */
     Concat_CUDA(pool0_a, pool1_a, pool2_a, pool3_a, concat_a);
 
-    /* in [BS, 1024 * 4] -> out [2048, BS] */
+    /* in [4096, BS] -> out [2048, BS] */
     MoE(concat_a, moe_exp0_w, moe_exp0_b, moe_exp1_w, moe_exp1_b,
       moe_exp2_w, moe_exp2_b, moe_exp3_w, moe_exp3_b, moe_gate_w,
       moe_gate_b, moe_a);
@@ -322,11 +319,9 @@ void predict_sentiment(float *inputs, float *outputs, size_t n_samples) {
 
     /* in [BS, 1024] -> out [BS, 512] */
     Linear_CUDA_slow_fc(linear0_a, linear1_w, linear1_b, linear1_a, true, stream5);
-    CHECK_CUDA(cudaDeviceSynchronize());
 
     /* in [BS, 512] -> out [BS, 2] */
     Linear_CUDA_slow_fc(linear1_a, linear2_w, linear2_b, linear2_a, false, stream5);
-    CHECK_CUDA(cudaDeviceSynchronize());
 
     /* cf) The output 'linear2_a' (shape: [2]) contains the probabilities 
       for each sentiment class (0: negative, 1: positive). To determine 
