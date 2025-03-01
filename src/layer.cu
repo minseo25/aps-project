@@ -698,7 +698,7 @@ void ReLU_GetMax_CUDA(Tensor *in, Tensor *out, cudaStream_t &stream) {
 
   dim3 blockDim(THREADS_PER_BLOCK);
   dim3 gridDim((BS * C + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK, 1);
-  GetMax_Kernel<<<gridDim, blockDim, 0, stream>>>(in->d_buf, out->d_buf, BS, s, C);
+  ReLU_GetMax_Kernel<<<gridDim, blockDim, 0, stream>>>(in->d_buf, out->d_buf, BS, s, C);
   // CHECK_CUDA(cudaDeviceSynchronize());
 }
 
